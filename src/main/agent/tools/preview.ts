@@ -22,6 +22,13 @@ function fmtConsole(lines: ConsoleLine[]): string {
     .join('\n')
 }
 
+/** Automatically feed newly-captured runtime/network problems into the model after preview operations. */
+function withDiagnostics(result: string): string {
+  const diagnostics = previewService.diagnostics()
+  if (!diagnostics.length) return result
+  return `${result}\n\nPreview diagnostics captured automatically:\n${fmtConsole(diagnostics)}`
+}
+
 const openSchema = z.object({
   url: z
     .string()
@@ -60,7 +67,7 @@ const openPreview: ToolDef<typeof openSchema> = {
     }
     const lines = [`Preview loaded: ${info.url}`, `Title: ${info.title || '(none)'}`]
     if (loadError) lines.push(`Load error: ${loadError}`)
-    return lines.join('\n')
+    return withDiagnostics(lines.join('\n'))
   }
 }
 
@@ -72,7 +79,7 @@ const reloadPreview: ToolDef<typeof emptySchema> = {
   async handler() {
     if (!previewService.hasGuest()) return NO_PREVIEW
     const { info, loadError } = await previewService.reload()
-    return loadError ? `Reloaded ${info.url} with a load error: ${loadError}` : `Reloaded ${info.url} (title: ${info.title || '(none)'}).`
+    return withDiagnostics(loadError ? `Reloaded ${info.url} with a load error: ${loadError}` : `Reloaded ${info.url} (title: ${info.title || '(none)'}).`)
   }
 }
 
@@ -94,6 +101,8 @@ const previewConsole: ToolDef<typeof consoleSchema> = {
   async handler(args) {
     if (!previewService.hasGuest()) return NO_PREVIEW
     const lines = previewService.consoleLines({ clear: args.clear, level: args.level })
+    // An explicit console read already put these diagnostics in model context; do not repeat them on the next tool.
+    previewService.diagnostics()
     const errs = lines.filter((l) => l.level === 'error').length
     const header = `${lines.length} message(s)${args.level ? ` at level ≥ ${args.level}` : ''}${errs ? `, ${errs} error(s)` : ''}:`
     return `${header}\n${fmtConsole(lines)}`
@@ -116,7 +125,7 @@ const snapshotPreview: ToolDef<typeof emptySchema> = {
         if (Array.isArray(v)) return v.length ? `${label}:\n  - ${v.join('\n  - ')}` : ''
         return v ? `${label}: ${String(v)}` : ''
       }
-      return [
+      return withDiagnostics([
         part('URL', o.url),
         part('Title', o.title),
         part('Headings', o.headings),
@@ -126,9 +135,9 @@ const snapshotPreview: ToolDef<typeof emptySchema> = {
         o.text ? `Visible text:\n${String(o.text)}` : ''
       ]
         .filter(Boolean)
-        .join('\n\n')
+        .join('\n\n'))
     } catch {
-      return json
+      return withDiagnostics(json)
     }
   }
 }
@@ -153,7 +162,7 @@ const evalPreview: ToolDef<typeof evalSchema> = {
   },
   async handler(args) {
     if (!previewService.hasGuest()) return NO_PREVIEW
-    return await previewService.evaluate(args.code)
+    return withDiagnostics(await previewService.evaluate(args.code))
   }
 }
 
@@ -206,7 +215,7 @@ const screenshotPreview: ToolDef<typeof screenshotSchema> = {
     } else {
       note = `captured at ${width}×${height} — that is the Preview panel's current size, NOT a design target. If the page targets a different viewport, re-shoot with width/height rather than restyling to fit this shape`
     }
-    return `Screenshot ${note} (${path}), attached above for your visual review.`
+    return withDiagnostics(`Screenshot ${note} (${path}), attached above for your visual review.`)
   }
 }
 

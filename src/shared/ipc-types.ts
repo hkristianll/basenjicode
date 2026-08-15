@@ -147,6 +147,8 @@ export interface PreviewRegister {
   webContentsId: number
   url: string
   title: string
+  /** False for the early did-attach registration; true/omitted once DOM-ready can release preview_open. */
+  ready?: boolean
 }
 
 export interface GitFile {

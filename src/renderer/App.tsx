@@ -43,6 +43,8 @@ import {
 } from './composerState'
 import { groupChatItems, isAgentItem } from './chatPresentation'
 import { visibleAssistantText } from './chatText'
+import { notifyWhenUnfocused, syncAttentionNotifications } from './attentionNotifications'
+import { buildFixOnlyThisPrompt } from './diffFix'
 
 export function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -68,6 +70,8 @@ export function App() {
   const [bgTasks, setBgTasks] = useState<BgTask[]>([])
   const [effectiveContextLimit, setEffectiveContextLimit] = useState<number | null>(null)
   const [dismissedAttentionIds, setDismissedAttentionIds] = useState<Set<string>>(() => new Set())
+  const notifiedAttentionIds = useRef<Set<string>>(new Set())
+  const activeSessionIdRef = useRef<string | null>(null)
   const [petHappy, setPetHappy] = useState(false)
   const prevRunning = useRef(false)
 
@@ -96,6 +100,7 @@ export function App() {
   const voiceRef = useRef<VoiceApi | null>(null)
 
   const activeChat = chats[sessionId ?? ''] ?? initialChatState
+  activeSessionIdRef.current = sessionId
   const activeComposer = sessionId ? (composerBySession[sessionId] ?? EMPTY_COMPOSER_STATE) : EMPTY_COMPOSER_STATE
   const input = activeComposer.draft
   const images = activeComposer.images
@@ -563,6 +568,32 @@ export function App() {
     void sendText(t, images)
   }, [activeChat.running, activeComposer, editingQueueId, images, input, sendText, sessionId, storeComposer])
 
+  const onFixDiffSelection = useCallback(
+    (path: string, selection: string) => {
+      if (!sessionId || !selection.trim()) return
+      const prompt = buildFixOnlyThisPrompt(path, selection)
+      setAppView('chat')
+      if (activeChat.running) {
+        const queued = enqueuePrompt(activeComposer, prompt)
+        // A context action must not destroy a draft the user was already composing.
+        storeComposer(
+          sessionId,
+          {
+            ...queued,
+            draft: activeComposer.draft,
+            images: activeComposer.images,
+            editingQueueId: activeComposer.editingQueueId
+          },
+          true
+        )
+        toast.info('Selected fix queued')
+        return
+      }
+      void sendText(prompt)
+    },
+    [activeChat.running, activeComposer, sendText, sessionId, storeComposer]
+  )
+
   const onSteer = useCallback(() => {
     const t = input.trim()
     if (!t || images.length > 0 || !sessionId || !activeChat.running || editingQueueId) return
@@ -881,7 +912,8 @@ export function App() {
         tone: 'error',
         title: 'Backend is offline',
         detail: 'The active connection is not reachable.',
-        source: 'Connection'
+        source: 'Connection',
+        notify: true
       })
     } else if (status === 'auth') {
       out.push({
@@ -889,7 +921,8 @@ export function App() {
         tone: 'warn',
         title: 'Connection needs credentials',
         detail: 'The active backend rejected the current key.',
-        source: 'Connection'
+        source: 'Connection',
+        notify: true
       })
     } else if (status === 'no-model') {
       out.push({
@@ -897,7 +930,8 @@ export function App() {
         tone: 'warn',
         title: 'No model selected',
         detail: 'Pick a model before starting the next turn.',
-        source: 'Model'
+        source: 'Model',
+        notify: true
       })
     }
 
@@ -913,7 +947,8 @@ export function App() {
           tone: 'warn',
           title: 'Approval waiting',
           detail: toolSubject(it),
-          source: it.name
+          source: it.name,
+          notify: true
         })
       } else if (it.kind === 'tool' && it.ok === false && failures < 3) {
         failures += 1
@@ -931,7 +966,8 @@ export function App() {
           tone: 'error',
           title: 'Turn failed',
           detail: shortLine(it.text, 132),
-          source: 'Chat'
+          source: 'Chat',
+          notify: true
         })
       }
     }
@@ -988,6 +1024,20 @@ export function App() {
     () => rawAttentionItems.filter((item) => !dismissedAttentionIds.has(item.id)),
     [dismissedAttentionIds, rawAttentionItems]
   )
+  useEffect(() => {
+    const { fresh, liveIds } = syncAttentionNotifications(attentionItems, notifiedAttentionIds.current)
+    notifiedAttentionIds.current = liveIds
+    if (fresh.length === 0) return
+
+    const primary = fresh[0]
+    const targetSessionId = sessionId
+    const more = fresh.length > 1 ? ` (+${fresh.length - 1} more)` : ''
+    notifyWhenUnfocused(primary.title, `${primary.detail}${more}`, () => {
+      window.focus()
+      setDock('needs')
+      if (targetSessionId && activeSessionIdRef.current !== targetSessionId) void onSelectSession(targetSessionId)
+    })
+  }, [attentionItems, onSelectSession, sessionId])
   const onDismissAttention = useCallback((id: string) => {
     setDismissedAttentionIds((previous) => {
       if (previous.has(id)) return previous
@@ -1223,6 +1273,7 @@ export function App() {
             planText={planText}
             snapshot={snapshot}
             onUndo={onUndo}
+            onFixDiffSelection={onFixDiffSelection}
             previewTarget={previewTarget}
             attentionItems={attentionItems}
             onDismissAttention={onDismissAttention}

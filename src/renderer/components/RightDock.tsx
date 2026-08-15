@@ -34,6 +34,7 @@ export function RightDock(props: {
   planText: string
   snapshot?: SnapshotInfo
   onUndo?: (turnId: string) => void
+  onFixDiffSelection?: (path: string, selection: string) => void
   previewTarget?: PreviewTarget
   attentionItems: AttentionItem[]
   onDismissAttention?: (id: string) => void
@@ -83,7 +84,14 @@ export function RightDock(props: {
         {props.tab === 'preview' && <PreviewPanel target={props.previewTarget} />}
         {props.tab === 'tasks' && <TasksPanel tasks={props.tasks} onStop={props.onStopTask} />}
         {props.tab === 'plan' && <PlanPanel sessionId={props.sessionId} planText={props.planText} />}
-        {props.tab === 'git' && <GitPanel sessionId={props.sessionId} snapshot={props.snapshot} onUndo={props.onUndo} />}
+        {props.tab === 'git' && (
+          <GitPanel
+            sessionId={props.sessionId}
+            snapshot={props.snapshot}
+            onUndo={props.onUndo}
+            onFixSelection={props.onFixDiffSelection}
+          />
+        )}
         {props.tab === 'needs' && <NeedsMePanel items={props.attentionItems} onDismiss={props.onDismissAttention} />}
       </div>
     </aside>

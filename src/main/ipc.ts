@@ -20,7 +20,7 @@ import { runTicketWithCheck, runReview, writeRejectionFeedback, BOARD_DRIVING_TO
 import { runHermes, runCritic, applyReplanDiff, withRoleBanner, hermesRunConfig, type StuckTicket } from './agent/specOrchestrator'
 import { normalizeRole, departmentOf } from './agent/specPlan'
 import { canonicalizeProject, resolveRaidCwd } from './loop-safety'
-import { validateCheck, rewriteCheck } from './agent/checkLint'
+import { checkPromptRules, rewriteCheck, shellCheckLabel, validateCheck } from './agent/checkLint'
 import { setHermesController, type HermesController } from './agent/hermesControl'
 import { createPauseGate } from './agent/pauseGate'
 import { createSingleFlight } from './agent/singleFlight'
@@ -587,8 +587,8 @@ export function registerIpc(): void {
         const prompt =
           `The team is STUCK and these tickets are unfinished:\n${lines}\n\n` +
           'This team runs UNATTENDED. Resolve it yourself with your tools - do NOT ask the user to choose between options and do NOT just describe the problem. ' +
-          'Often the WORK is done and only the CHECK is broken or impossible: a bash idiom that fails in PowerShell (test -f / grep / 2>/dev/null / &&), an unparenthesized `Test-Path a -and Test-Path b`, or a check for files no ticket creates (e.g. a `pytest` / `npm test` check when the project has no test files). ' +
-          'For EACH stuck ticket take a concrete action NOW: if its CHECK is broken or impossible, FIX it in place with edit_ticket (a corrected PowerShell check like `npm run build` / `pytest` / `npx tsc --noEmit`) and reopen_ticket it - do NOT cancel-and-refile a duplicate; cancel only a ticket that is genuinely out of scope or impossible; or reopen one that is just blocked. ' +
+          `Often the WORK is done and only the CHECK is broken or impossible: syntax for a different shell, invalid condition/chaining syntax, or a check for files no ticket creates (e.g. a \`pytest\` / \`npm test\` check when the project has no test files). ${checkPromptRules()} ` +
+          `For EACH stuck ticket take a concrete action NOW: if its CHECK is broken or impossible, FIX it in place with edit_ticket (a corrected ${shellCheckLabel()} check like \`npm run build\` / \`pytest\` / \`npx tsc --noEmit\`) and reopen_ticket it - do NOT cancel-and-refile a duplicate; cancel only a ticket that is genuinely out of scope or impossible; or reopen one that is just blocked. ` +
           'When the only work left is unresolvable, cancel it so the project can complete. Act with your tools now.'
         if (session.isBusy()) session.enqueueSteer(prompt)
         else await session.runTurn(prompt, randomUUID(), hermesEmit)

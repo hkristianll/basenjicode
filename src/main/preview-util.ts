@@ -88,3 +88,32 @@ export function filterByLevel(lines: ConsoleLine[], min?: ConsoleLevel): Console
   const rank = LEVEL_RANK[min]
   return lines.filter((l) => LEVEL_RANK[l.level] >= rank)
 }
+
+export interface NetworkDiagnosticInput {
+  url: string
+  method?: string
+  resourceType?: string
+  statusCode?: number
+  error?: string
+}
+
+/** Turn failed subresources/API calls into one compact, credential-safe line for the agent. */
+export function formatNetworkDiagnostic(input: NetworkDiagnosticInput): string | null {
+  if (input.resourceType === 'mainFrame') return null // did-fail-load reports this with better detail
+  if (input.error === 'net::ERR_ABORTED') return null // normal during reload/navigation
+  if (!input.error && (input.statusCode === undefined || input.statusCode < 400)) return null
+
+  let target = input.url
+  try {
+    const url = new URL(input.url)
+    // Paths diagnose missing assets/API routes; credentials and query values do not belong in model context.
+    target = `${url.origin}${url.pathname}${url.search ? '?…' : ''}`
+  } catch {
+    // Keep the original string when Electron supplies a non-standard URL.
+  }
+  if (target.length > 400) target = `${target.slice(0, 399)}…`
+  const request = `${input.method || 'GET'} ${input.resourceType || 'resource'} ${target}`
+  return input.error
+    ? `[network] ${request} failed (${input.error})`
+    : `[network] ${request} returned HTTP ${input.statusCode}`
+}

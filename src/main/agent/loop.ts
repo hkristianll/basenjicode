@@ -37,6 +37,7 @@ import { isToolError } from '../../shared/toolStatus'
 import { log } from '../logger'
 import { bgTasks } from '../bgtasks'
 import { recordTurn, type StopDetail } from './turnStats'
+import { countReadsOutsideRelevantFiles } from './relevantFiles'
 import { buildResumeMessages, isMidStreamDropError, MAX_STREAM_RESUMES, OverlapTrimmer } from './streamResume'
 import type { Emit } from './events'
 
@@ -322,6 +323,8 @@ export interface AgentConfig {
   /** True for sessions with no human present (board/Hermes workers): a screened shell command is DENIED
    *  with guidance instead of raising an approval prompt nobody will answer. */
   headless?: boolean
+  /** Board seed's server-selected starting files; used only for the Scout-premise telemetry counter. */
+  relevantFiles?: string[]
 }
 
 /**
@@ -1231,7 +1234,16 @@ export class AgentSession {
           // Board per-ticket worker sessions are id'd `loop-<ticket>-<turnId>` (boardInner.ts); everything else
           // (chat, Brooke) is not a Mission worker turn. This is the discriminator the stop-reason histogram
           // filters on to isolate Mission struggle from interactive chat.
-          board: this.id.startsWith('loop-')
+          board: this.id.startsWith('loop-'),
+          ...(this.config.relevantFiles
+            ? {
+                readsOutsideRelevantFiles: countReadsOutsideRelevantFiles(
+                  this.workspace.root,
+                  this.reads.readPaths(),
+                  this.config.relevantFiles
+                )
+              }
+            : {})
         })
       }
       // Keep the persisted transcript well-formed no matter how the turn ended.

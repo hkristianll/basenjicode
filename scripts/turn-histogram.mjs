@@ -80,6 +80,17 @@ console.log(`  done_after_nudge vs done_clean         : ${afterNudge} vs ${clean
 console.log(`  edit→write_file steer fired            : ${rows.filter((r) => r.nudgedRewrite).length}`)
 console.log(`  empty-args steer fired                 : ${rows.filter((r) => r.nudgedEmptyArgs).length}`)
 
+// --- Scout premise: does the cheap relevant-file scorer actually miss where workers go? ---
+const measuredReads = rows.filter((r) => typeof r.readsOutsideRelevantFiles === 'number')
+if (measuredReads.length) {
+  const outside = measuredReads.reduce((sum, r) => sum + r.readsOutsideRelevantFiles, 0)
+  const guilty = measuredReads.filter((r) => r.readsOutsideRelevantFiles > 0).length
+  console.log('\nSCOUT PREMISE (unique read_file targets outside the relevant-file seed):')
+  console.log(`  measured board turns                 : ${measuredReads.length}`)
+  console.log(`  turns with any outside read          : ${guilty}  (${((100 * guilty) / measuredReads.length).toFixed(1)}%)`)
+  console.log(`  outside reads total / per turn       : ${outside} / ${(outside / measuredReads.length).toFixed(2)}`)
+}
+
 // --- coarse buckets, for reference against the UI's StopReason ---
 const byStop = {}
 for (const r of rows) byStop[r.stopReason] = (byStop[r.stopReason] || 0) + 1

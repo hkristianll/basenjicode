@@ -107,4 +107,11 @@ describe('turns.jsonl board discriminator', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0].board).toBe(false)
   })
+
+  it('records the Scout-premise counter when a relevant-file seed is supplied', async () => {
+    await runTurnWithId('loop-42-counter', { ...BASE, relevantFiles: [] })
+    const rows = readTurns()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].readsOutsideRelevantFiles).toBe(0)
+  })
 })

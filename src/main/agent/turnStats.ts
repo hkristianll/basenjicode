@@ -83,6 +83,8 @@ export interface TurnStat {
   // chat turn. Lets the histogram split "Mission struggle" from chat without guessing by model name — the two
   // share the same AgentSession engine but run under very different (more brittle) autonomous tuning.
   board?: boolean
+  /** Unique read_file targets outside the board seed's relevant-file list. The Scout go/no-go counter. */
+  readsOutsideRelevantFiles?: number
 }
 
 /** Append one turn's stop record. Self-contained + never throws (telemetry must not break a turn). */

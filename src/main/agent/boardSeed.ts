@@ -39,6 +39,8 @@ const BRIEF_CAP = 800
 const BODY_CAP = 8_000
 const CHECK_CAP = 2_000
 
+const PLAYBOOK_CAP = 4_000
+
 /** The single user message that seeds a ticket's fresh agent turn: title + body, the spec when present, and
  *  — on a retry — the reason the previous attempt was rejected, so the revision actually addresses it. */
 export function buildSeedMessage(
@@ -48,7 +50,8 @@ export function buildSeedMessage(
   approvedPlan?: string,
   priorProgress?: string | null,
   leadBrief?: string,
-  relevantFiles?: string[]
+  relevantFiles?: string[],
+  projectPlaybook?: string | null
 ): string {
   let msg = `${ticket.title}\n\n${(ticket.body || '(no description)').slice(0, BODY_CAP)}`
   // Point the worker at the files it actually needs + a lean-research directive, so it doesn't read the whole
@@ -67,6 +70,9 @@ export function buildSeedMessage(
     "file's own location: a file in `src/game/` imports a sibling as `./Name` and a cousin as `../entities/Name`. " +
     'NEVER prefix an in-`src` import with `../src/…` (a common mistake). Put a test BESIDE the code it tests and import ' +
     'it with `./Name`.'
+  if (projectPlaybook?.trim()) {
+    msg += `\n\n--- Project playbook (apply to this ticket) ---\n${projectPlaybook.trim().slice(0, PLAYBOOK_CAP)}`
+  }
   if (ticket.spec_ref && spec) msg += `\n\n--- Spec (${ticket.spec_ref}) ---\n${spec.slice(0, SPEC_CAP)}`
   // Team-lead brief (Phase 3): the lead distilled its team memory to what matters for THIS ticket, so the worker
   // gets a thumbnail of the team's craft instead of re-deriving it (or carrying the whole memory).
