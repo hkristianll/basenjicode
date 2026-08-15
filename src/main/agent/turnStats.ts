@@ -85,6 +85,15 @@ export interface TurnStat {
   board?: boolean
   /** Unique read_file targets outside the board seed's relevant-file list. The Scout go/no-go counter. */
   readsOutsideRelevantFiles?: number
+  // ── Model-reliability columns (Agent Lab groundwork): raw counters only — ratios (tokens/sec, failure
+  //    rate per tool) are computed by the consumer so the record never bakes in a derivation. ──
+  /** Output tokens across ALL completions this turn (retries/nudges/compaction included). */
+  completionTokens?: number
+  /** Wall-clock ms spent inside model completions this turn (tool execution excluded), so
+   *  completionTokens/(genMs/1000) is decode throughput, not turn duration. */
+  genMs?: number
+  /** Failed tool calls by tool name this turn (isToolError results). Absent when nothing failed. */
+  toolFailures?: Record<string, number>
 }
 
 /** Append one turn's stop record. Self-contained + never throws (telemetry must not break a turn). */

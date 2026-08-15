@@ -17,7 +17,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 
-const DEFAULT = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'NordCode', 'logs', 'turns.jsonl')
+// Electron's app.getPath('logs') differs per OS; probe the known locations and take the first that exists.
+const CANDIDATES = [
+  path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'NordCode', 'logs', 'turns.jsonl'),
+  path.join(os.homedir(), '.config', 'nordcode', 'logs', 'turns.jsonl'),
+  path.join(os.homedir(), 'Library', 'Logs', 'NordCode', 'turns.jsonl')
+]
+const DEFAULT = CANDIDATES.find((p) => fs.existsSync(p)) || CANDIDATES[0]
 const argv = process.argv.slice(2)
 const surfaceFilter = argv.includes('--board') ? 'board' : argv.includes('--chat') ? 'chat' : null
 const file = argv.find((a) => !a.startsWith('--')) || DEFAULT
@@ -89,6 +95,30 @@ if (measuredReads.length) {
   console.log(`  measured board turns                 : ${measuredReads.length}`)
   console.log(`  turns with any outside read          : ${guilty}  (${((100 * guilty) / measuredReads.length).toFixed(1)}%)`)
   console.log(`  outside reads total / per turn       : ${outside} / ${(outside / measuredReads.length).toFixed(2)}`)
+}
+
+// --- model throughput (Agent Lab groundwork: raw counters in the record, ratios computed here) ---
+// genMs > 500 skips no_model/busy/instant-error turns whose tiny denominators would spike the ratio.
+const throughputRows = rows.filter((r) => (r.genMs || 0) > 500 && (r.completionTokens || 0) > 0)
+if (throughputRows.length) {
+  const tokPerSec = (r) => r.completionTokens / (r.genMs / 1000)
+  const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]
+  console.log('\nTHROUGHPUT (output tokens/sec inside model calls — tool time excluded; median per model):')
+  for (const m of [...new Set(throughputRows.map((r) => r.model || '(unknown)'))]) {
+    const mr = throughputRows.filter((r) => (r.model || '(unknown)') === m)
+    console.log(`  ${m.padEnd(34)} ${String(mr.length).padStart(4)} turns  ${median(mr.map(tokPerSec)).toFixed(1)} tok/s`)
+  }
+}
+
+// --- which tools actually fail (the missing Agent Lab column: name-level failures, not just counts) ---
+const toolFailures = {}
+for (const r of rows) {
+  for (const [name, n] of Object.entries(r.toolFailures || {})) toolFailures[name] = (toolFailures[name] || 0) + n
+}
+const failedTools = Object.entries(toolFailures).sort((a, b) => b[1] - a[1])
+if (failedTools.length) {
+  console.log('\nTOOL FAILURES (failed calls by tool):')
+  for (const [name, n] of failedTools) console.log(`  ${name.padEnd(24)} ${String(n).padStart(5)}`)
 }
 
 // --- coarse buckets, for reference against the UI's StopReason ---

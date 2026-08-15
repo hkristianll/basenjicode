@@ -366,6 +366,10 @@ export class AgentSession {
   // token cap sums prompt+completion per attempt from it. Approximate lower bound: an attempt that dies
   // mid-stream never delivers its usage chunk.
   private completionTokensThisTurn = 0
+  // Wall-clock ms spent inside streamCompletion this turn (all retries/resumes/non-streaming fallbacks land
+  // within the timed wrapper). An instance field for the same reason as the two counters above. For turns.jsonl:
+  // completionTokensThisTurn / (genMsThisTurn/1000) is decode throughput with tool-execution time excluded.
+  private genMsThisTurn = 0
   // The stop chosen by done() for the current turn — read by the runTurn finally block (which has the
   // in-scope counters) to write one turns.jsonl record. Null until done() runs; reset each turn.
   private lastStop: { stopReason: StopReason; detail: StopDetail | string } | null = null
@@ -573,6 +577,7 @@ export class AgentSession {
     this.completionsThisTurn = 0
     this.streamResumesThisTurn = 0
     this.completionTokensThisTurn = 0
+    this.genMsThisTurn = 0
     this.pendingSteer = [] // start clean — steers only apply within the turn that's now beginning
     this.emit = emit
     this.currentTurnId = turnId
@@ -601,6 +606,7 @@ export class AgentSession {
     let lastFinishReason = '' // last model finish_reason this turn
     let lastTurn = 0 // tool rounds reached
     let totalToolCalls = 0 // total tool calls executed this turn
+    const toolFailures: Record<string, number> = {} // failed calls by tool name this turn (for turns.jsonl)
 
     try {
       if (!this.config.model) {
@@ -1079,6 +1085,7 @@ export class AgentSession {
           // Match our own status prefixes exactly ("ERROR: " etc.) so a tool whose legitimate output
           // merely begins with the word ERROR (e.g. captured program logs) isn't flagged as a failure.
           const ok = !isToolError(toolResult)
+          if (!ok) toolFailures[call.name] = (toolFailures[call.name] ?? 0) + 1
           emit({ type: 'tool-result', turnId, callId: call.id, ok, result: toolResult, images: toolImages })
           const todoReminder = this.noteTodoRelevantTool(call.name, ok, call.arguments)
           if (todoReminder) this.messages.push({ role: 'system', content: todoReminder })
@@ -1235,6 +1242,9 @@ export class AgentSession {
           // (chat, Brooke) is not a Mission worker turn. This is the discriminator the stop-reason histogram
           // filters on to isolate Mission struggle from interactive chat.
           board: this.id.startsWith('loop-'),
+          completionTokens: this.completionTokensThisTurn,
+          genMs: this.genMsThisTurn,
+          ...(Object.keys(toolFailures).length ? { toolFailures } : {}),
           ...(this.config.relevantFiles
             ? {
                 readsOutsideRelevantFiles: countReadsOutsideRelevantFiles(
@@ -1559,7 +1569,28 @@ export class AgentSession {
   }
 
   /** Stream one completion, assembling text and tool-call deltas. */
+  /** Timed shell over the real completion path: every model call (streaming, resumes, the non-streaming
+   *  fallback) accrues into genMsThisTurn so turns.jsonl can separate decode time from tool time. */
   private async streamCompletion(
+    messages: ChatMessage[],
+    tools: ChatTool[] | undefined,
+    signal: AbortSignal
+  ): Promise<{
+    text: string
+    toolCalls: ToolCall[]
+    finishReason: string
+    usage?: { prompt_tokens: number; completion_tokens?: number }
+    reasoning: string
+  }> {
+    const startedAt = Date.now()
+    try {
+      return await this.streamCompletionInner(messages, tools, signal)
+    } finally {
+      this.genMsThisTurn += Date.now() - startedAt
+    }
+  }
+
+  private async streamCompletionInner(
     messages: ChatMessage[],
     tools: ChatTool[] | undefined,
     signal: AbortSignal
