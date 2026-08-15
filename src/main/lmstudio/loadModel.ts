@@ -96,11 +96,36 @@ function lmsPath(): string {
   return path.join(os.homedir(), '.lmstudio', 'bin', bin)
 }
 
-/** Run an `lms` subcommand. Resolves true on exit 0, false on any failure (best-effort, never throws). */
+/**
+ * True when `baseURL` points at an LM Studio on THIS machine.
+ *
+ * The `lms` CLI has no notion of a target server — it always drives the local instance. Every CLI path
+ * must therefore be gated on this: against a remote LM Studio the CLI reports success while operating on
+ * an entirely different machine, and the caller's real server is left untouched.
+ */
+export function isLocalLmStudio(baseURL: string): boolean {
+  try {
+    const h = new URL(baseURL).hostname.toLowerCase()
+    return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Run an `lms` subcommand. Resolves true only on a real success (best-effort, never throws).
+ *
+ * Exit code alone is not enough: `lms unload <id>` EXITS 0 when the model isn't loaded, printing
+ * "Model Not Found". Treating that as success is actively harmful — it makes a no-op look like a
+ * completed unload and suppresses the REST fallback that would have reached the right server.
+ */
 function lms(args: string[], timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
     try {
-      execFile(lmsPath(), args, { timeout: timeoutMs }, (err) => resolve(!err))
+      execFile(lmsPath(), args, { timeout: timeoutMs }, (err, stdout, stderr) => {
+        if (err) return resolve(false)
+        resolve(!/model not found|cannot find a model/i.test(`${stdout ?? ''}${stderr ?? ''}`))
+      })
     } catch {
       resolve(false)
     }
@@ -110,8 +135,11 @@ function lms(args: string[], timeoutMs: number): Promise<boolean> {
 /** Unload one model via the `lms` CLI — the RELIABLE path (the REST /api/v1/models/unload shape is
  *  LM-Studio-version-dependent and silently no-ops on some builds). Does NOT take the server lock: the
  *  worker↔reviewer swap caller already holds it (`withServerLock` is not reentrant). Best-effort. */
-export function lmsUnloadUnlocked(modelId: string): Promise<boolean> {
-  return modelId ? lms(['unload', modelId], 30_000) : Promise.resolve(true)
+export function lmsUnloadUnlocked(baseURL: string, modelId: string): Promise<boolean> {
+  if (!modelId) return Promise.resolve(true)
+  // Remote server → the CLI cannot reach it; report failure so the caller falls through to REST.
+  if (!isLocalLmStudio(baseURL)) return Promise.resolve(false)
+  return lms(['unload', modelId], 30_000)
 }
 
 /** Server root (strip a trailing /v1, /v0, …) — the lock key, so every connection pointed at one LM Studio
@@ -187,6 +215,10 @@ export async function ensureModelLoaded(
     const state = await fetchModelLoadState(baseURL, modelId)
     const plan = planModelLoad(state, wanted)
     if (!plan || !plan.load) return { ctx: plan?.target ?? null, reloaded: false }
+    // A (re)load needs the `lms` CLI, which only drives the LOCAL instance. Against a remote server we
+    // cannot load anything, so bail BEFORE onReloadStart — otherwise the user is told "Loading … at
+    // N-token context" for a reload that provably never happens. LM Studio's own JIT takes over instead.
+    if (!isLocalLmStudio(baseURL)) return { ctx: state?.loadedCtx ?? null, reloaded: false }
 
     onReloadStart?.(plan.target)
     // A smaller instance is already loaded under this id — unload it first so `lms load` reloads in place

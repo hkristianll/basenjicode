@@ -24,6 +24,31 @@ function rootOf(baseURL: string): string {
   return baseURL.replace(/\/+$/, '').replace(/\/v\d+$/, '')
 }
 
+/** Both shapes LM Studio's /api/v1/models has shipped - see loadedInstanceIds. */
+export interface LmsModelsResponse {
+  /** Newer builds: one entry per model, each carrying its loaded instances. */
+  models?: Array<{ key?: string; loaded_instances?: Array<{ id?: string }> }>
+  /** Older builds: a flat list where each entry IS an instance. */
+  data?: Array<{ id?: string; instance_id?: string }>
+}
+
+/**
+ * Instance ids of `model` that are currently loaded, across both response shapes.
+ *
+ * Only the flat `data[].instance_id` form was handled before, and current LM Studio does not emit it —
+ * it returns `models[].loaded_instances[].id` instead, so the lookup silently matched nothing and the
+ * swap freed no VRAM at all. Reading both shapes keeps older servers working.
+ */
+export function loadedInstanceIds(data: LmsModelsResponse | null, model: string): string[] {
+  if (!data || !model) return []
+  const fromModels = (data.models ?? [])
+    .filter((m) => m.key === model)
+    .flatMap((m) => m.loaded_instances ?? [])
+    .map((i) => i.id)
+  const fromData = (data.data ?? []).filter((m) => m.id === model).map((m) => m.instance_id)
+  return [...fromModels, ...fromData].filter((id): id is string => typeof id === 'string' && id.length > 0)
+}
+
 /**
  * Unload a model from VRAM, best-effort. NEVER throws.
  * - Ollama: POST /api/generate {keep_alive:0} immediately frees it (documented).
@@ -50,18 +75,16 @@ export async function unloadModel(conn: SwapConn, model: string): Promise<void> 
       if (conn.kind === 'lmstudio') {
         // Reliable path: the `lms` CLI (the same one ensureModelLoaded drives). Only fall back to the
         // version-dependent REST endpoint if the CLI is unavailable, so the swap actually frees VRAM.
-        if (await lmsUnloadUnlocked(model)) return
+        if (await lmsUnloadUnlocked(conn.baseURL, model)) return
         const res = await fetch(`${root}/api/v1/models`)
         if (!res.ok) return
-        const data = (await res.json().catch(() => null)) as { data?: Array<{ id?: string; instance_id?: string }> } | null
-        for (const m of data?.data ?? []) {
-          if (m.instance_id && m.id === model) {
-            await fetch(`${root}/api/v1/models/unload`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ instance_id: m.instance_id })
-            }).catch(() => undefined)
-          }
+        const data = (await res.json().catch(() => null)) as LmsModelsResponse | null
+        for (const id of loadedInstanceIds(data, model)) {
+          await fetch(`${root}/api/v1/models/unload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ instance_id: id })
+          }).catch(() => undefined)
         }
       }
     })
