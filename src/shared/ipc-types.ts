@@ -24,6 +24,7 @@ export const IPC = {
   mcpStatus: 'mcp:status',
   lmstudioProbe: 'lmstudio:probe',
   lmstudioModels: 'lmstudio:models',
+  contextLimit: 'agent:contextLimit',
   modelProfileDescribe: 'model:profileDescribe',
   agentSetEffort: 'agent:setEffort',
   voiceProbe: 'voice:probe',
@@ -432,6 +433,10 @@ export interface Api {
     models(p?: { baseURL?: string; apiKey?: string; kind?: ConnectionKind }): Promise<string[]>
     /** One-line capability-profile summary for a model id (seeded + learned facts). */
     profileDescribe(model: string): Promise<string>
+    /** The context window a turn will actually use: the setting trimmed to the model's real loaded length. */
+    contextLimit(): Promise<number>
+    /** Fires whenever that effective window changes (connection switch, settings save, model reload). */
+    onContextLimit(cb: (limit: number) => void): () => void
   }
   voice: {
     /** Is the voice sidecar reachable? */

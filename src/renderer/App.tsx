@@ -66,6 +66,7 @@ export function App() {
   const dockW = useResizable({ axis: 'x', initial: 430, min: 300, reserve: 540, invert: true, storageKey: 'nc.dock.w', containerRef: appRef })
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget | undefined>(undefined)
   const [bgTasks, setBgTasks] = useState<BgTask[]>([])
+  const [effectiveContextLimit, setEffectiveContextLimit] = useState<number | null>(null)
   const [dismissedAttentionIds, setDismissedAttentionIds] = useState<Set<string>>(() => new Set())
   const [petHappy, setPetHappy] = useState(false)
   const prevRunning = useRef(false)
@@ -298,6 +299,14 @@ export function App() {
   useEffect(() => {
     void window.api.bgtasks.list().then(setBgTasks)
     const unsub = window.api.bgtasks.onEvent(setBgTasks)
+    return () => unsub()
+  }, [])
+
+  // The context window a turn will really use — the setting trimmed to the model's loaded length. Pulled
+  // on mount because the startup refresh can complete before this window exists, then kept live.
+  useEffect(() => {
+    void window.api.lmstudio.contextLimit().then(setEffectiveContextLimit)
+    const unsub = window.api.lmstudio.onContextLimit(setEffectiveContextLimit)
     return () => unsub()
   }, [])
 
@@ -840,7 +849,11 @@ export function App() {
 
   // Prefer LM Studio's real usage; fall back to the chars/4 estimate before the first reply.
   const tokensUsed = activeChat.tokens?.used ?? estimatedTokens
-  const tokenLimit = activeChat.tokens?.limit ?? settings?.contextLimitTokens ?? 32768
+  // Prefer the CURRENT effective window over the one recorded on the last reply, so the meter mirrors what
+  // shouldCompact() actually compares (last prompt size against the live cap) and a model/connection switch
+  // is reflected immediately. The raw setting is the last resort: it can claim a window the model never
+  // loaded — 150k configured against 134107 actually loaded — and overstate the headroom.
+  const tokenLimit = effectiveContextLimit ?? activeChat.tokens?.limit ?? settings?.contextLimitTokens ?? 32768
   const todoActivitySinceUpdate = useMemo(() => meaningfulActionsSinceTodoUpdate(activeChat.items), [activeChat.items])
 
   const planText = useMemo(() => {

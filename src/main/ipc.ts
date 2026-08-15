@@ -96,14 +96,38 @@ let lastActiveConnId = ''
 // per model per session, not on every turn. Reset on a connection switch (alongside modelContextLengths).
 const cappedNotified = new Set<string>()
 
+/**
+ * The context window a turn will ACTUALLY run with: the configured setting, trimmed to the model's real
+ * loaded length when LM Studio reports one. A user can set 150k while the GPU only loaded 134107, and
+ * every consumer must agree on the smaller number — the compaction threshold and the UI meter included.
+ */
+function effectiveContextLimit(): number {
+  const conn = activeConnection(settings)
+  const ctxLimit = conn.contextLimitTokens ?? settings.contextLimitTokens
+  const real = modelContextLengths[conn.model]
+  return real ? Math.min(ctxLimit, real) : ctxLimit
+}
+
+/**
+ * Push the effective cap to the renderer. Without this the meter only learns the real window from a
+ * `usage` event, i.e. after the first reply — so a freshly opened session displayed the raw setting and
+ * overstated the headroom (the "51k / 150k" report, where the true cap was 134107).
+ */
+function pushContextLimit(): void {
+  BrowserWindow.getAllWindows()[0]?.webContents.send(IPC.contextLimit, effectiveContextLimit())
+}
+
 async function refreshContextLengths(): Promise<void> {
   const conn = activeConnection(settings)
   // LM Studio's native /api/v0/models reports real loaded context lengths; other backends don't expose it.
-  if (conn.kind !== 'lmstudio') return
-  const m = await fetchModelContextLengths(conn.baseURL)
-  // Only replace on a non-empty read so a transient fetch failure (or every model briefly unloaded)
-  // can't wipe a good cache and make us fall back to the raw setting mid-session.
-  if (Object.keys(m).length) modelContextLengths = m
+  // Non-LM-Studio backends still get a push: there the setting IS the effective cap, and the meter needs it.
+  if (conn.kind === 'lmstudio') {
+    const m = await fetchModelContextLengths(conn.baseURL)
+    // Only replace on a non-empty read so a transient fetch failure (or every model briefly unloaded)
+    // can't wipe a good cache and make us fall back to the raw setting mid-session.
+    if (Object.keys(m).length) modelContextLengths = m
+  }
+  pushContextLimit()
 }
 
 /**
@@ -225,10 +249,8 @@ function configFromSettings(): AgentConfig {
   // A connection's per-connection override wins; otherwise inherit the global Settings default.
   const temperature = conn.temperature ?? settings.temperature
   const maxTokens = conn.maxTokens ?? settings.maxTokens
-  const ctxLimit = conn.contextLimitTokens ?? settings.contextLimitTokens
-  const real = modelContextLengths[conn.model]
-  // Trim against the model's actual loaded context length when LM Studio reports it.
-  const trimmed = real ? Math.min(ctxLimit, real) : ctxLimit
+  // Single source of truth, shared with the meter push — the UI must never show a window the turn won't use.
+  const trimmed = effectiveContextLimit()
   const local = isLocalWeakModel(conn)
   return {
     model: conn.model,
@@ -857,6 +879,9 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle(IPC.settingsGet, () => settings)
+  // Pull as well as push: the startup refresh can land before the window exists, so the renderer asks
+  // once on mount and then just listens.
+  ipcMain.handle(IPC.contextLimit, () => effectiveContextLimit())
   ipcMain.handle(IPC.settingsSet, (_e, patch: Partial<Settings>) => {
     settings = updateSettings(patch)
     rebuildClient()
