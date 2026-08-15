@@ -5,6 +5,7 @@ import type { AgentEvent, ApprovalDecision, BgTask, ConnectionStatus, RewindPlan
 import { chatReducer, deriveItems, initialChatState, initialSessionChats, type ToolItem, type UIItem } from './store'
 import { useResizable } from './hooks/useResizable'
 import { MODE_META, MODE_ORDER } from './modeMeta'
+import type { ChatEffort } from './components/EffortSelector'
 import { Sidebar } from './components/Sidebar'
 import { LoopsRail } from './components/LoopsRail'
 import { TopBar } from './components/TopBar'
@@ -468,6 +469,19 @@ export function App() {
       setMode(m)
       setSettings(await window.api.settings.set({ mode: m }))
       if (sessionId) await window.api.agent.setMode({ sessionId, mode: m })
+    },
+    [sessionId]
+  )
+
+  // Per-chat reasoning-effort dial (frontier-CLI convention: lives under the chatbox, not in
+  // Settings). '' = connection/profile default. Kept per session in renderer state only.
+  const [effortBySession, setEffortBySession] = useState<Record<string, ChatEffort>>({})
+  const chatEffort: ChatEffort = (sessionId && effortBySession[sessionId]) || ''
+  const onChangeEffort = useCallback(
+    async (v: ChatEffort) => {
+      if (!sessionId) return
+      setEffortBySession((prev) => ({ ...prev, [sessionId]: v }))
+      await window.api.agent.setEffort({ sessionId, effort: v === '' ? null : v })
     },
     [sessionId]
   )
@@ -1154,6 +1168,8 @@ export function App() {
               : undefined
           }
           onChangeMode={onChangeMode}
+          effort={chatEffort}
+          onChangeEffort={onChangeEffort}
           onAddFiles={onAddFiles}
           onAddFolder={onPickDir}
           onSend={onSend}

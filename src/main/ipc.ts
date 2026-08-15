@@ -1028,6 +1028,16 @@ export function registerIpc(): void {
     }
   )
 
+  // Per-chat reasoning-effort dial (composer): an explicit value overrides for THIS session; null
+  // restores the connection's own setting (or the model profile's default for local backends).
+  ipcMain.handle(IPC.agentSetEffort, (_e, p: { sessionId: string; effort: 'off' | 'low' | 'medium' | 'high' | null }) => {
+    const session = getOrCreateSession(p.sessionId)
+    if (!session) return
+    const conn = activeConnection(settings)
+    const fallback = conn.reasoningEffort ?? resolveConnectionDefaults(conn.model, isLocalWeakModel(conn)).reasoningEffort
+    session.setReasoningEffort(p.effort ?? fallback)
+  })
+
   ipcMain.handle(IPC.agentSetMode, (_e, p: { sessionId: string; mode: AgentMode }) => {
     const session = getOrCreateSession(p.sessionId)
     if (!session) return

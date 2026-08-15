@@ -25,6 +25,7 @@ export const IPC = {
   lmstudioProbe: 'lmstudio:probe',
   lmstudioModels: 'lmstudio:models',
   modelProfileDescribe: 'model:profileDescribe',
+  agentSetEffort: 'agent:setEffort',
   voiceProbe: 'voice:probe',
   voiceTranscribe: 'voice:transcribe',
   voiceSpeak: 'voice:speak',
@@ -390,6 +391,8 @@ export interface Api {
     cancel(turnId: string): Promise<void>
     decide(p: { turnId: string; callId: string; decision: ApprovalDecision; note?: string }): Promise<void>
     setMode(p: { sessionId: string; mode: AgentMode }): Promise<void>
+    /** Per-chat reasoning-effort override (composer dial); null restores the connection/profile default. */
+    setEffort(p: { sessionId: string; effort: 'off' | 'low' | 'medium' | 'high' | null }): Promise<void>
     clearApprovals(sessionId: string): Promise<void>
     undoTurn(p: { sessionId: string; turnId: string }): Promise<{ restored: number; total: number; failed: number }>
     /** W5c rewind: what rewinding to this turn would do — shown in the confirm dialog. Null = not rewindable. */

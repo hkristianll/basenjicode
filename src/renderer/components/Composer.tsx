@@ -10,6 +10,7 @@ import {
 } from 'react'
 import type { AgentMode, QueuedPrompt } from '../../shared/domain-types'
 import { ModeSelector } from './ModeSelector'
+import { EffortSelector, type ChatEffort } from './EffortSelector'
 import { AddMenu } from './AddMenu'
 import { Icon } from './Icon'
 import { VoiceOrb, type OrbState } from './VoiceOrb'
@@ -59,6 +60,8 @@ export function Composer(props: {
   queue: QueuedPrompt[]
   editingQueueId: string | null
   onChangeMode: (m: AgentMode) => void
+  effort: ChatEffort
+  onChangeEffort: (v: ChatEffort) => void
   onAddFiles: () => void
   onAddFolder: () => void
   onSend: () => void
@@ -357,6 +360,7 @@ export function Composer(props: {
             onSlash={openSlash}
           />
           <ModeSelector mode={props.mode} onChange={props.onChangeMode} />
+          <EffortSelector value={props.effort} onChange={props.onChangeEffort} />
           {props.voice && (
             <div className="voice-row">
               <VoiceOrb

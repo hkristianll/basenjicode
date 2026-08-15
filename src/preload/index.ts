@@ -7,6 +7,7 @@ const api: Api = {
     cancel: (turnId) => ipcRenderer.invoke(IPC.agentCancel, turnId),
     decide: (p) => ipcRenderer.invoke(IPC.agentDecide, p),
     setMode: (p) => ipcRenderer.invoke(IPC.agentSetMode, p),
+    setEffort: (p) => ipcRenderer.invoke(IPC.agentSetEffort, p),
     clearApprovals: (sessionId) => ipcRenderer.invoke(IPC.agentClearApprovals, sessionId),
     undoTurn: (p) => ipcRenderer.invoke(IPC.agentUndoTurn, p),
     rewindPlan: (p) => ipcRenderer.invoke(IPC.agentRewindPlan, p),

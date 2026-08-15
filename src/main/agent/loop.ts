@@ -361,6 +361,12 @@ export class AgentSession {
   // 1b' thinking budgets: one notice per session; counter for telemetry/log.
   private warnedBudgetClose = false
   private budgetForceCloses = 0
+
+  /** Per-chat effort override (composer dial). Applies from the next completion — budgets, the
+   *  prompt's reasoning note, and the suppression-ignored notice all read config.reasoningEffort. */
+  setReasoningEffort(effort: 'off' | 'low' | 'medium' | 'high' | undefined): void {
+    this.config.reasoningEffort = effort
+  }
   private pendingApprovals = new Map<string, (r: { decision: ApprovalDecision; note?: string }) => void>()
   // The agent's working task list (todo_write). In-memory per session; streamed to the UI as it changes.
   private todoItems: TodoItem[] = []
