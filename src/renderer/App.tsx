@@ -206,6 +206,12 @@ export function App() {
         setSessions((prev) => prev.map((s) => (s.id === e.sessionId ? { ...s, title: e.title } : s)))
         return
       }
+      if (e.type === 'session-cwd') {
+        setSessions((prev) => prev.map((s) => (s.id === e.sessionId ? { ...s, cwd: e.cwd } : s)))
+        // Keep the top bar's folder chip live when the agent re-roots the session the user is looking at.
+        if (activeSessionIdRef.current === e.sessionId) setCwd(e.cwd)
+        return
+      }
       const sid = turnSession.current.get(e.turnId)
       if (!sid) {
         const queued = pendingEvents.current.get(e.turnId) ?? []

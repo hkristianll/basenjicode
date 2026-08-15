@@ -203,6 +203,8 @@ export type AgentEvent =
       editedFiles?: number
     }
   | { type: 'session-titled'; sessionId: string; title: string }
+  // The set_working_folder tool re-rooted a session mid-turn — the renderer updates its meta + top bar.
+  | { type: 'session-cwd'; sessionId: string; cwd: string }
 
 /* ----- Loop runner (autonomous board drain) — CANONICAL contract; consumers (T3/T4/T6/T7) must not redefine. ----- */
 

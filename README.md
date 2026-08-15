@@ -30,6 +30,7 @@ Developed and battle-tested against **Qwen 3.8 27B on LM Studio**: the harness t
 ### Agent capabilities
 
 - Chat mode with tool use: read/write/edit/multi-edit files, grep/glob, shell, background tasks.
+- The agent can switch the chat's working folder (`set_working_folder`) — "new project, make a folder for it" re-roots the session, and the Git panel and top bar follow.
 - Live in-app preview pane with screenshot feedback to the model.
 - Task/todo tracking panel.
 - Approval gates for risky actions with undoable edits and per-turn snapshots + rewind.

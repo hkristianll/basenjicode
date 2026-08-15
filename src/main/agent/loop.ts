@@ -354,6 +354,8 @@ export class AgentSession {
   private currentAbort: AbortController | null = null
   private busy = false
   private reads = new ReadTracker()
+  /** Host persistence hook for set_working_folder; doubles as the capability gate (see constructor opts). */
+  private onWorkspaceChange?: (root: string) => void
   private snapshots = new SnapshotRecorder()
   // Total model completions issued in the current turn — bounds the multiplied retry/nudge/compaction
   // paths (each calls streamCompletion) so a flaky model can't burn unbounded calls/wall-clock per turn.
@@ -428,9 +430,13 @@ export class AgentSession {
     history: ChatMessage[]
     allowList?: AllowList
     tokenScale?: number
+    /** Host hook fired after set_working_folder re-roots the session (persist the new cwd). Its PRESENCE is
+     *  also the capability gate: sessions constructed without it (board workers, Brooke) cannot re-root. */
+    onWorkspaceChange?: (root: string) => void
   }) {
     this.id = opts.id
     this.workspace = new Workspace(opts.workspaceRoot)
+    this.onWorkspaceChange = opts.onWorkspaceChange
     this.client = opts.client
     this.registry = opts.registry
     this.config = opts.config
@@ -451,6 +457,17 @@ export class AgentSession {
 
   getHistory(): ChatMessage[] {
     return this.messages
+  }
+
+  /** Re-root the sandbox mid-conversation (the set_working_folder tool). Later tool calls, the shell
+   *  screener, and the next turn's system prompt all resolve against the new root; the renderer is told
+   *  via session-cwd and the host persists it through onWorkspaceChange. */
+  setWorkspaceRoot(absPath: string): string {
+    this.workspace = new Workspace(absPath)
+    this.safety.setWorkspaceRoot(this.workspace.root)
+    this.emit?.({ type: 'session-cwd', sessionId: this.id, cwd: this.workspace.root })
+    this.onWorkspaceChange?.(this.workspace.root)
+    return this.workspace.root
   }
 
   /** Is a turn currently running? (Used to route a new message to steering instead of a fresh turn.) */
@@ -2052,7 +2069,9 @@ export class AgentSession {
       todos: this.todoController,
       images: this.config.images,
       attachImages: onImages,
-      hermesProject: this.config.hermesProject
+      hermesProject: this.config.hermesProject,
+      // Capability-gated on the host hook: without a persistence path a re-root would silently revert on reload.
+      setWorkspaceRoot: this.onWorkspaceChange ? (p) => this.setWorkspaceRoot(p) : undefined
     }
     const timeoutMs = def.timeoutMs ?? 30_000
     let timedOut = false

@@ -73,6 +73,9 @@ export interface ToolContext {
    *  the images are ALSO fed back to the model (as a follow-up user message) so a vision-capable model can SEE
    *  them — e.g. preview_screenshot for visual review. Default (UI-only) preserves generate_image's behavior. */
   attachImages?: (dataUrls: string[], opts?: { toModel?: boolean }) => void
+  /** Chat-only capability: re-root this session's sandbox at an existing directory (set_working_folder) and
+   *  return the canonical new root. Absent for board/manager sessions — a worker must never re-root mid-ticket. */
+  setWorkspaceRoot?: (absPath: string) => string
 }
 
 export interface ToolDef<S extends z.ZodTypeAny = z.ZodTypeAny> {

@@ -60,7 +60,9 @@ function pickWorkerRegistry(base: ToolRegistry, ticket: BoardTicket): ToolRegist
   // Strip `task` (sub-agent delegation) from EVERY board worker: a focused ticket should implement its own files,
   // not spawn a child agent on another connection — that loads a SECOND model (VRAM overcommit + churn) and an
   // agentic-tuned coder reaches for it readily. Review workers also lose the edit tools.
-  return departmentOf(ticket.body) === 'review' ? base.without([...REVIEW_EDIT_TOOLS, 'task']) : base.without(['file_finding', 'task'])
+  return departmentOf(ticket.body) === 'review'
+    ? base.without([...REVIEW_EDIT_TOOLS, 'task', 'set_working_folder'])
+    : base.without(['file_finding', 'task', 'set_working_folder'])
 }
 
 // A ticket is a focused unit of work, but it must be a REACHABLE one. Telemetry (turns.jsonl, board:true vs

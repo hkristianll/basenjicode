@@ -300,7 +300,16 @@ function getOrCreateSession(sessionId: string): AgentSession | null {
     mode: persisted.mode,
     history: persisted.messages,
     allowList: persisted.allowList,
-    tokenScale: persisted.tokenScale
+    tokenScale: persisted.tokenScale,
+    // set_working_folder persistence: re-read from disk so only cwd changes — the live transcript is
+    // saved by its own turn-end path. Presence of this hook is what grants chat the re-root capability.
+    onWorkspaceChange: (root) => {
+      const s = loadSession(sessionId)
+      if (s) {
+        s.cwd = root
+        saveSession(s)
+      }
+    }
   })
   sessions.set(sessionId, session)
   return session
