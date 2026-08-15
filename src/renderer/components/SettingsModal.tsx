@@ -655,7 +655,7 @@ export function SettingsModal({
                 Text tool-call mode
               </label>
               <label>
-                Reasoning
+                Reasoning effort
                 <select
                   value={c.reasoningEffort ?? ''}
                   onChange={(e) =>
@@ -663,16 +663,17 @@ export function SettingsModal({
                   }
                 >
                   <option value="">Model default</option>
-                  <option value="off">Off (no thinking)</option>
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
+                  <option value="off">Off (≈no thinking)</option>
+                  <option value="low">Low (~2k char budget)</option>
+                  <option value="medium">Medium (~8k char budget)</option>
+                  <option value="high">High (unlimited)</option>
                 </select>
               </label>
             </div>
             <p className="settings-hint">
               Text tool-call mode helps weak local models that emit empty/truncated native tool calls. Reasoning
-              “Off” stops a thinking model from spending its output budget before the tool call.
+              effort is ENFORCED: below High, an over-budget think is closed mid-stream and the model is steered
+              straight to its answer — it works even for models that ignore /no_think (e.g. Qwen 3.8).
             </p>
           </div>
         ))}
