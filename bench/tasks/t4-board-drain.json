@@ -1,0 +1,27 @@
+{
+  "id": "t4-board-drain",
+  "type": "board",
+  "title": "Drain a three-ticket local board",
+  "prompt": null,
+  "fixture": "bench/fixtures/t4",
+  "completionChecks": [],
+  "maxTurns": 36,
+  "notes": "The runner creates these three inline mini tickets on an isolated local-board project, then measures whether the worker drains them in dependency order.",
+  "miniTickets": [
+    {
+      "title": "Add a greeting module",
+      "body": "Create src/greeting.js exporting greet(name), returning `Hello, <name>!`. Add a node:test covering Ada.",
+      "check": "node --test"
+    },
+    {
+      "title": "Add a greeting CLI",
+      "body": "After the greeting module exists, create cli.js that prints greet(process.argv[2] || 'world'). Keep the module API unchanged.",
+      "check": "node cli.js Basenji"
+    },
+    {
+      "title": "Document and verify usage",
+      "body": "Add README.md with the exact command `node cli.js Basenji` and its expected output. Run the complete test suite before finishing.",
+      "check": "node --test"
+    }
+  ]
+}

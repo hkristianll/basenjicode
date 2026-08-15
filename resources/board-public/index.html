@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ticket Board</title>
+    <style>
+      :root {
+        --bg: #0d1117; --panel: #161b22; --panel2: #1c2230; --line: #2a3240;
+        --text: #e6edf3; --dim: #9aa7b5; --faint: #6b7785;
+        --ready: #2f81f7; --blocked: #d29922; --prog: #a371f7; --review: #39c5cf; --done: #3fb950; --cancel: #6b7785;
+        --shadow: 0 1px 3px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.25);
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+      header { position: sticky; top: 0; z-index: 5; display: flex; gap: 16px; align-items: center; padding: 12px 20px; background: rgba(13,17,23,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+      h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+      h1 span { color: var(--ready); }
+      select, input, button { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; }
+      button { cursor: pointer; }
+      button:hover { border-color: var(--ready); }
+      .counts { display: flex; gap: 10px; color: var(--dim); font-size: 12px; flex-wrap: wrap; }
+      .counts b { color: var(--text); font-weight: 600; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--cancel); display: inline-block; margin-right: 5px; }
+      .dot.live { background: var(--done); box-shadow: 0 0 8px var(--done); }
+      .spacer { flex: 1; }
+      main { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; padding: 18px 20px; align-items: start; }
+      .col { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; min-height: 120px; display: flex; flex-direction: column; }
+      .col h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; margin: 0; padding: 12px 14px 8px; color: var(--dim); display: flex; align-items: center; gap: 8px; }
+      .col h2 .n { margin-left: auto; background: var(--panel2); border-radius: 20px; padding: 1px 9px; color: var(--text); font-size: 11px; }
+      .swatch { width: 8px; height: 8px; border-radius: 50%; }
+      .cards { padding: 4px 10px 12px; display: flex; flex-direction: column; gap: 9px; }
+      .card { background: var(--panel2); border: 1px solid var(--line); border-left-width: 3px; border-radius: 9px; padding: 10px 12px; cursor: pointer; transition: transform .08s, border-color .12s; }
+      .card:hover { transform: translateY(-1px); border-color: var(--faint); }
+      .card .id { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+      .card .title { margin: 2px 0 7px; font-weight: 550; }
+      .card .meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 11px; }
+      .badge { background: #0d1117; border: 1px solid var(--line); border-radius: 20px; padding: 1px 8px; color: var(--dim); }
+      .badge.who { color: var(--prog); border-color: #3a2d52; }
+      .badge.dep { color: var(--blocked); border-color: #4a3d1a; }
+      .badge.prio { color: var(--faint); }
+      .badge.check { color: var(--done); border-color: #1f3d28; }
+      .empty { color: var(--faint); font-size: 12px; padding: 6px 14px 14px; }
+      .ready .card { border-left-color: var(--ready); }
+      .blocked .card { border-left-color: var(--blocked); opacity: .9; }
+      .prog .card { border-left-color: var(--prog); }
+      .review .card { border-left-color: var(--review); }
+      .done .card { border-left-color: var(--done); opacity: .82; }
+      .done .card .title { text-decoration: line-through; text-decoration-color: var(--faint); }
+      .card.cancelled { opacity: .5; border-left-color: var(--cancel) !important; }
+      .done .card.cancelled .title { text-decoration: none; color: var(--faint); }
+      .badge.cancel { color: var(--cancel); border-color: var(--line); }
+      /* detail drawer */
+      .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; z-index: 20; }
+      .scrim.open { display: block; }
+      .drawer { position: fixed; top: 0; right: 0; height: 100%; width: min(560px, 92vw); background: var(--panel); border-left: 1px solid var(--line); box-shadow: var(--shadow); transform: translateX(100%); transition: transform .18s ease; z-index: 21; display: flex; flex-direction: column; }
+      .drawer.open { transform: none; }
+      .drawer header { background: var(--panel); position: static; }
+      .drawer .body { padding: 18px 22px; overflow: auto; }
+      .drawer h3 { margin: 0 0 4px; font-size: 18px; }
+      .drawer pre { white-space: pre-wrap; word-wrap: break-word; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 12px; color: var(--dim); }
+      .kv { display: flex; gap: 10px; margin: 6px 0; font-size: 13px; }
+      .kv span:first-child { color: var(--faint); width: 90px; flex: none; }
+      .comments { margin-top: 14px; }
+      .comment { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; }
+      .comment .who { color: var(--prog); font-size: 11px; }
+      .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+      .add { display: flex; gap: 8px; }
+      .add input { flex: 1; }
+      @media (max-width: 900px) { main { grid-template-columns: 1fr 1fr; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Ticket<span>Board</span></h1>
+      <select id="project" title="Project"></select>
+      <form class="add" id="addForm">
+        <input id="addTitle" placeholder="Quick add a ticket…" autocomplete="off" />
+        <button type="submit">Add</button>
+      </form>
+      <div class="spacer"></div>
+      <div class="counts" id="counts"></div>
+      <span title="live updates"><span class="dot" id="live"></span></span>
+    </header>
+    <main id="board">
+      <section class="col ready"><h2><span class="swatch" style="background:var(--ready)"></span>Ready<span class="n">0</span></h2><div class="cards"></div></section>
+      <section class="col blocked"><h2><span class="swatch" style="background:var(--blocked)"></span>Blocked<span class="n">0</span></h2><div class="cards"></div></section>
+      <section class="col prog"><h2><span class="swatch" style="background:var(--prog)"></span>In progress<span class="n">0</span></h2><div class="cards"></div></section>
+      <section class="col review"><h2><span class="swatch" style="background:var(--review)"></span>Review<span class="n">0</span></h2><div class="cards"></div></section>
+      <section class="col done"><h2><span class="swatch" style="background:var(--done)"></span>Done<span class="n">0</span></h2><div class="cards"></div></section>
+    </main>
+
+    <div class="scrim" id="scrim"></div>
+    <aside class="drawer" id="drawer">
+      <header><h1 style="font-size:14px">Ticket</h1><div class="spacer"></div><button id="closeDrawer">Close</button></header>
+      <div class="body" id="drawerBody"></div>
+    </aside>
+
+    <script>
+      const $ = (s, r = document) => r.querySelector(s)
+      const cols = { ready: $('.ready .cards'), blocked: $('.blocked .cards'), in_progress: $('.prog .cards'), review: $('.review .cards'), done: $('.done .cards') }
+      const colN = { ready: $('.ready .n'), blocked: $('.blocked .n'), in_progress: $('.prog .n'), review: $('.review .n'), done: $('.done .n') }
+      const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+      let project = ''
+
+      async function api(path, opts) {
+        const r = await fetch('/api' + path, opts)
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status)
+        return r.json()
+      }
+
+      function card(t) {
+        const deps = t.blocked_by && t.blocked_by.length ? `<span class="badge dep">needs ${t.blocked_by.map((d) => '#' + d).join(', ')}</span>` : ''
+        const who = t.assignee ? `<span class="badge who">@${esc(t.assignee)}</span>` : ''
+        const prio = t.priority !== 100 ? `<span class="badge prio">p${t.priority}</span>` : ''
+        const cancelled = t.status === 'cancelled' ? '<span class="badge cancel">cancelled</span>' : ''
+        const check = t.check ? '<span class="badge check" title="' + esc(t.check) + '">✓ check</span>' : ''
+        return `<div class="card${t.status === 'cancelled' ? ' cancelled' : ''}" data-id="${t.id}">
+          <div class="id">#${t.id}</div>
+          <div class="title">${esc(t.title)}</div>
+          <div class="meta">${who}${cancelled}${check}${deps}${prio}</div>
+        </div>`
+      }
+
+      function bucket(t) {
+        if (t.status === 'in_progress') return 'in_progress'
+        if (t.status === 'review') return 'review'
+        if (t.status === 'done' || t.status === 'cancelled') return 'done'
+        return t.ready ? 'ready' : 'blocked'
+      }
+
+      async function refresh() {
+        const q = project ? '?project=' + encodeURIComponent(project) : ''
+        const tickets = await api('/tickets' + q)
+        const groups = { ready: [], blocked: [], in_progress: [], review: [], done: [] }
+        for (const t of tickets) groups[bucket(t)].push(t)
+        for (const k of Object.keys(cols)) {
+          cols[k].innerHTML = groups[k].map(card).join('') || '<div class="empty">—</div>'
+          colN[k].textContent = groups[k].length
+        }
+        const s = await api('/summary' + q)
+        const cancelled = s.cancelled ? `<span><b>${s.cancelled}</b> cancelled</span>` : ''
+        const inReview = s.review ? `<span><b>${s.review}</b> in review</span>` : ''
+        $('#counts').innerHTML = `<span><b>${s.total}</b> total</span><span><b>${s.ready}</b> ready</span><span><b>${s.in_progress}</b> active</span>${inReview}<span><b>${s.done}</b> done</span>${cancelled}`
+      }
+
+      // Coalesce SSE bursts (a 20-ticket plan emits 20 events) into one trailing
+      // refresh, and never let a slow earlier fetch overwrite a newer one.
+      let refreshTimer = null, refreshing = false, refreshQueued = false
+      function scheduleRefresh() {
+        if (refreshTimer) return
+        refreshTimer = setTimeout(() => { refreshTimer = null; runRefresh() }, 80)
+      }
+      async function runRefresh() {
+        if (refreshing) { refreshQueued = true; return }
+        refreshing = true
+        try { await refresh(); await loadProjects() } catch (e) { /* transient */ }
+        refreshing = false
+        if (refreshQueued) { refreshQueued = false; scheduleRefresh() }
+      }
+
+      async function loadProjects() {
+        const list = await api('/projects')
+        const sel = $('#project')
+        const cur = sel.value
+        sel.innerHTML = '<option value="">All projects</option>' + list.map((p) => `<option>${esc(p)}</option>`).join('')
+        sel.value = cur
+      }
+
+      async function openTicket(id) {
+        const t = await api('/tickets/' + id)
+        const comments = (t.comments || []).map((c) => `<div class="comment"><div class="who">${esc(c.author)} · ${new Date(c.created_at).toLocaleString()}</div>${esc(c.text)}</div>`).join('') || '<div class="empty" style="padding:6px 0">No comments.</div>'
+        const next = { todo: 'in_progress', in_progress: 'review', review: 'done', done: 'todo', cancelled: 'todo' }
+        $('#drawerBody').innerHTML = `
+          <h3>#${t.id} ${esc(t.title)}</h3>
+          <div class="kv"><span>Project</span><b>${esc(t.project)}</b></div>
+          <div class="kv"><span>Status</span><b>${t.ready ? 'ready' : t.blocked ? 'blocked' : t.status}</b></div>
+          <div class="kv"><span>Assignee</span><b>${esc(t.assignee || '—')}</b></div>
+          <div class="kv"><span>Priority</span><b>${t.priority}</b></div>
+          <div class="kv"><span>Depends on</span><b>${t.deps.length ? t.deps.map((d) => '#' + d).join(', ') : '—'}</b></div>
+          ${t.spec_ref ? `<div class="kv"><span>Spec</span><b>${esc(t.spec_ref)}</b></div>` : ''}
+          <pre>${esc(t.body || '(no description)')}</pre>
+          <div class="row">
+            <button data-act="advance" data-to="${next[t.status]}">Move to ${next[t.status]}</button>
+            <button data-act="cancel">Cancel ticket</button>
+          </div>
+          <div class="comments"><h2 style="font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px">Comments</h2>${comments}
+            <form class="add" id="commentForm" style="margin-top:8px"><input id="commentText" placeholder="Add a comment…" autocomplete="off" /><button>Post</button></form>
+          </div>`
+        $('#drawer').classList.add('open'); $('#scrim').classList.add('open')
+        $('[data-act="advance"]').onclick = async (e) => { await api('/tickets/' + id + '/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: e.target.dataset.to }) }); openTicket(id) }
+        $('[data-act="cancel"]').onclick = async () => { await api('/tickets/' + id + '/status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'cancelled' }) }); closeDrawer() }
+        $('#commentForm').onsubmit = async (e) => { e.preventDefault(); const v = $('#commentText').value.trim(); if (!v) return; await api('/tickets/' + id + '/comment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ author: 'you', text: v }) }); openTicket(id) }
+      }
+      function closeDrawer() { $('#drawer').classList.remove('open'); $('#scrim').classList.remove('open') }
+
+      document.addEventListener('click', (e) => { const c = e.target.closest('.card'); if (c) openTicket(c.dataset.id) })
+      $('#closeDrawer').onclick = closeDrawer; $('#scrim').onclick = closeDrawer
+      $('#project').onchange = (e) => { project = e.target.value; refresh() }
+      $('#addForm').onsubmit = async (e) => { e.preventDefault(); const v = $('#addTitle').value.trim(); if (!v) return; await api('/tickets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: v, project: project || 'default' }) }); $('#addTitle').value = ''; runRefresh() }
+
+      // live updates. EventSource auto-reconnects and the server re-sends 'hello'
+      // on every (re)connect, so resyncing there catches up any events missed
+      // while disconnected.
+      const ev = new EventSource('/events')
+      ev.addEventListener('hello', () => { $('#live').classList.add('live'); scheduleRefresh() })
+      ev.addEventListener('change', scheduleRefresh)
+      ev.onerror = () => $('#live').classList.remove('live')
+
+      loadProjects().then(refresh)
+    </script>
+  </body>
+</html>

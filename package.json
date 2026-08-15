@@ -1,0 +1,57 @@
+{
+  "name": "basenjicode",
+  "version": "0.1.0",
+  "description": "NordCode — a local-LLM (LM Studio) coding agent, Claude Code-style desktop app",
+  "main": "./out/main/index.js",
+  "author": "hanskristian",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "test": "vitest run",
+    "shot": "node scripts/shot.mjs",
+    "peek": "node scripts/peek.mjs",
+    "e2e": "node scripts/e2e-folder.mjs",
+    "package": "electron-vite build && electron-builder --win",
+    "package:win": "electron-vite build && electron-builder --win",
+    "package:mac": "electron-vite build && electron-builder --mac",
+    "package:linux": "electron-vite build && electron-builder --linux"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "diff": "^9.0.0",
+    "highlight.js": "^11.11.1",
+    "openai": "^6.44.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "zod": "^4.4.3",
+    "zod-to-json-schema": "^3.25.2"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.2",
+    "@types/node": "^26.0.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^42.4.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "playwright-core": "^1.61.1",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.5",
+    "vitest": "^4.1.9"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hkristianll/basenjicode.git"
+  },
+  "homepage": "https://github.com/hkristianll/basenjicode#readme",
+  "engines": {
+    "node": ">=22"
+  }
+}

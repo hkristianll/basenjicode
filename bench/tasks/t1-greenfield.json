@@ -1,0 +1,16 @@
+{
+  "id": "t1-greenfield",
+  "title": "Greenfield browser game",
+  "prompt": "make a gta clone that works in the browser",
+  "fixture": "bench/fixtures/empty",
+  "completionChecks": [
+    { "type": "fileExists", "arg": "index.html" },
+    {
+      "type": "shellExitZero",
+      "arg": "node -e \"const fs=require('node:fs'),p=require('node:path');const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.name==='node_modules'?[]:e.isDirectory()?walk(p.join(d,e.name)):[p.join(d,e.name)]);if(walk('.').filter(f=>f.endsWith('.js')).length<3)process.exit(1)\""
+    },
+    { "type": "httpOk", "arg": "/" }
+  ],
+  "maxTurns": 48,
+  "notes": "Greenfield stress task. The runner starts its HTTP server before evaluating the 200 response. Require at least three JavaScript files so a one-file mock does not pass."
+}

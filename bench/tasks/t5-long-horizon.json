@@ -1,0 +1,14 @@
+{
+  "id": "t5-long-horizon",
+  "title": "Long-horizon three-feature browser app",
+  "prompt": "Build a polished browser project-planning app with three complete features: (1) a project workspace and shared project data model persisted locally, (2) a task board with create, edit, move, filter, and delete flows, and (3) an insights dashboard that derives progress and workload summaries from feature 1's shared project data. Feature 3 must import and use the feature 1 data model rather than duplicating it. Plan the work, implement every feature in its own module, exercise the app in the browser, and keep going until all three features are complete and integrated.",
+  "fixture": "bench/fixtures/empty",
+  "completionChecks": [
+    { "type": "fileExists", "arg": "src/features/project-workspace.js" },
+    { "type": "fileExists", "arg": "src/features/task-board.js" },
+    { "type": "fileExists", "arg": "src/features/insights-dashboard.js" },
+    { "type": "httpOk", "arg": "/" }
+  ],
+  "maxTurns": 128,
+  "notes": "Long-horizon/compaction task. Feature 3 explicitly depends on feature 1 so a model that loses architectural state near a large context cannot pass with three unrelated placeholders."
+}

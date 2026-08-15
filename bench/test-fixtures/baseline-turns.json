@@ -1,0 +1,10 @@
+[
+  {
+    "ts": "2026-08-14T10:02:15.000Z",
+    "turnId": "baseline",
+    "stopReason": "error",
+    "detail": "circuit_breaker",
+    "turns": 6,
+    "warnContinues": 0
+  }
+]

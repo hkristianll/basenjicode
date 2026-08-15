@@ -1,0 +1,7 @@
+{
+  "name": "bench-t3-monolith",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  }
+}

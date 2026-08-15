@@ -1,0 +1,4 @@
+[
+  { "type": "fileExists", "arg": "index.html", "passed": true },
+  { "type": "httpOk", "arg": "/", "passed": true }
+]

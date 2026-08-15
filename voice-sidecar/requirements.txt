@@ -1,0 +1,13 @@
+# NordCode voice sidecar — local STT + TTS dependencies.
+#   pip install -r requirements.txt
+faster-whisper>=1.1.0      # speech-to-text (CTranslate2 backend; GPU when CUDA is present)
+kokoro-onnx>=0.4.0         # text-to-speech (82M neural voice, onnxruntime); pulls espeakng-loader
+openwakeword>=0.6.0        # hands-free wake word ("Hey Jarvis"), ONNX
+sounddevice>=0.4           # live mic capture for the wake listener
+soundfile>=0.12
+numpy
+
+# GPU speech-to-text (optional, recommended on NVIDIA): CUDA 12 cuBLAS + cuDNN for CTranslate2.
+# Without these the sidecar transcribes on CPU automatically — fine for short push-to-talk clips.
+nvidia-cublas-cu12
+nvidia-cudnn-cu12

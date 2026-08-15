@@ -1,0 +1,34 @@
+# dependencies / build
+node_modules/
+out/
+dist/
+*.tsbuildinfo
+
+# runtime artifacts
+logs/
+*.log
+# …but bench calibration fixtures are DATA, not runtime logs — keep them tracked
+!bench/test-fixtures/*.log
+bench/history/*.json
+bench/history/RESULTS.md
+
+# scratch: build/rollback snapshots, image-gen scratch, style recovery, patches
+tmp/
+
+# secrets & local config — never commit
+.env
+.env.*
+*.pem
+*.key
+settings.json
+modelProfiles.json
+
+# large local assets (models, media) — document download paths in README instead
+voice-sidecar/models/
+*.onnx
+*.gguf
+*.safetensors
+
+# OS noise
+Thumbs.db
+.DS_Store

@@ -1,0 +1,15 @@
+{
+  "id": "t3-refactor",
+  "title": "Split a monolithic Node order processor",
+  "prompt": "split this into modules without changing behavior; tests must stay green",
+  "fixture": "bench/fixtures/t3",
+  "completionChecks": [
+    { "type": "shellExitZero", "arg": "node --test" },
+    {
+      "type": "shellExitZero",
+      "arg": "node -e \"const fs=require('node:fs'),p=require('node:path');const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(p.join(d,e.name)):[p.join(d,e.name)]);if(walk('.').filter(f=>f.endsWith('.js')&&!f.endsWith('.test.js')).length<3)process.exit(1)\""
+    }
+  ],
+  "maxTurns": 32,
+  "notes": "The fixture begins with all production behavior in one roughly 300-line messy.js file. Three deliberately small node:test cases pin name normalization, order totals, and receipt formatting."
+}

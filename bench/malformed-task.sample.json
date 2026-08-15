@@ -1,0 +1,7 @@
+{
+  "id": "malformed",
+  "prompt": 42,
+  "fixture": "bench/fixtures/does-not-exist",
+  "completionChecks": [{ "type": "unknown", "arg": "" }],
+  "maxTurns": 0
+}

@@ -1,0 +1,39 @@
+appId: com.hanskristian.basenjicode
+productName: BasenjiCode
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - out/**/*
+  - package.json
+# Ship icon.ico at the app root so the Desktop/Start-Menu shortcut's IconLocation (…\NordCode\icon.ico)
+# survives packaging + the win-unpacked → install robocopy sync, instead of going missing on reinstall.
+extraResources:
+  - from: resources/icon.ico
+    to: ../icon.ico
+  # The in-process ticket board serves its web UI from here (resolved via process.resourcesPath at runtime).
+  - from: resources/board-public
+    to: board-public
+win:
+  icon: resources/icon.ico
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+# macOS — build on a Mac (electron-builder converts resources/icon.png to .icns). Unsigned is fine for
+# local --dir builds; distribution needs signing/notarization (add `mac.identity` + notarize config).
+mac:
+  icon: resources/icon.png
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+# Linux — AppImage runs anywhere; deb for Debian/Ubuntu.
+linux:
+  icon: resources/icon.png
+  category: Development
+  target:
+    - AppImage
+    - deb

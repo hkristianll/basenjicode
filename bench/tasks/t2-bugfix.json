@@ -1,0 +1,18 @@
+{
+  "id": "t2-bugfix",
+  "title": "Find and repair a seeded canvas-game bug",
+  "prompt": "the game is broken - find the bug, fix it, and verify it runs",
+  "fixture": "bench/fixtures/t2",
+  "completionChecks": [
+    {
+      "type": "shellExitZero",
+      "arg": "node -e \"const fs=require('node:fs'),cp=require('node:child_process'),p=require('node:path');for(const f of fs.readdirSync('src').filter(f=>f.endsWith('.js')))cp.execFileSync(process.execPath,['--check',p.join('src',f)],{stdio:'inherit'})\""
+    },
+    {
+      "type": "shellExitZero",
+      "arg": "node -e \"const s=require('node:fs').readFileSync('src/game.js','utf8');if(s.includes('score: 0 // SEEDED_BUG'))process.exit(1)\""
+    }
+  ],
+  "maxTurns": 24,
+  "notes": "Seeded bug: src/game.js deliberately omits the comma after `score: 0` on the line marked SEEDED_BUG. The fixture was syntax-checked successfully before that comma was removed."
+}
