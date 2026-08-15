@@ -32,9 +32,15 @@ export function PromptQueue(props: {
                 type="button"
                 className="icon-btn"
                 onClick={() => props.onPromote(entry.id)}
-                disabled={props.running}
-                title={props.running ? 'Wait for the current turn to finish' : 'Send this prompt next'}
-                aria-label="Send queued prompt next"
+                disabled={props.running && !!entry.images?.length}
+                title={
+                  props.running
+                    ? entry.images?.length
+                      ? 'Image prompts cannot steer a running task — sends next turn'
+                      : 'Steer the running task with this prompt now'
+                    : 'Send this prompt next'
+                }
+                aria-label="Send queued prompt"
               >
                 <Icon name="send" size={12} />
               </button>

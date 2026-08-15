@@ -586,9 +586,12 @@ export function App() {
 
   const onPromoteQueue = useCallback(
     (id: string) => {
-      if (!sessionId || activeChat.running) return
+      if (!sessionId) return
       const entry = activeComposer.queue.find((item) => item.id === id)
       if (!entry) return
+      // While a task runs, promoting a TEXT prompt steers it immediately (same mechanic as
+      // Ctrl+Enter). Steering can't carry images, so image entries still wait for the next turn.
+      if (activeChat.running && entry.images?.length) return
       storeComposer(sessionId, removeQueuedPrompt(activeComposer, id), true)
       void sendText(entry.text, entry.images ?? [])
     },
