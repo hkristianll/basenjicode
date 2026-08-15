@@ -248,6 +248,31 @@ const MEMORY_NUDGE =
   'commands, conventions, gotchas, where things live), call remember(fact) now — one concise fact per call. ' +
   'Skip this if nothing new is worth saving.'
 
+/**
+ * Compact once the conversation passes `frac` of the context cap.
+ *
+ * `promptTokens` is the model's own reported prompt size and is authoritative; `estimatedTokens` is the
+ * calibrated fallback used when there is no usage yet — which is every FIRST turn of a RESTORED session,
+ * since the loop's lastPromptTokens is per-instance and starts at 0.
+ *
+ * Both inputs are measured against the SAME ceiling, and that is the point of this function. The estimate
+ * path used to subtract the output reserve (`cap - maxTokens - 2000`) before applying `frac`, which made
+ * it far stricter than the real-usage path — at cap 134107 it fired at 54.6k where real usage fired at
+ * 73.8k, so reopening a session compacted it immediately while the meter still showed plenty of room.
+ * Raising `maxTokens` made the gap worse, which is backwards: a bigger output budget is not a reason to
+ * summarize sooner. The reserve belongs to TRIMMING (composeSendableMessages/trimHistory), not here.
+ */
+export function shouldCompactNow(opts: {
+  promptTokens: number
+  estimatedTokens: number
+  contextLimitTokens: number
+  frac: number
+}): boolean {
+  if (opts.contextLimitTokens <= 0) return false
+  const used = opts.promptTokens > 0 ? opts.promptTokens : opts.estimatedTokens
+  return used > opts.contextLimitTokens * opts.frac
+}
+
 export interface AgentConfig {
   model: string
   temperature: number
@@ -1282,15 +1307,12 @@ export class AgentSession {
   /** Should we summarize the conversation to reclaim context? True once it passes ~80% of the cap. */
   private shouldCompact(): boolean {
     if (lastUserIndex(this.messages) < 4) return false
-    // Compact at a fraction of the cap (Hermes parity: chat ~0.55, board 0.8). Prefer the model's real
-    // reported prompt size; fall back to the calibrated estimate when there's no usage yet.
-    const frac = this.config.compactAtFraction ?? 0.8
-    if (this.lastPromptTokens > 0) {
-      return this.lastPromptTokens > this.config.contextLimitTokens * frac
-    }
-    // No usage yet (e.g. a freshly loaded huge session): fall back to the calibrated estimate.
-    const budget = this.config.contextLimitTokens - (this.config.maxTokens ?? 4096) - 2000
-    return budget > 0 && estimateTokens(this.messages) * this.tokenScale > budget * frac
+    return shouldCompactNow({
+      promptTokens: this.lastPromptTokens,
+      estimatedTokens: estimateTokens(this.messages) * this.tokenScale,
+      contextLimitTokens: this.config.contextLimitTokens,
+      frac: this.config.compactAtFraction ?? 0.8
+    })
   }
 
   /** Replace the older transcript with an LLM-written summary, keeping the current turn intact. */
