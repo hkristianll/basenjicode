@@ -25,6 +25,7 @@ export const IPC = {
   lmstudioProbe: 'lmstudio:probe',
   lmstudioModels: 'lmstudio:models',
   contextLimit: 'agent:contextLimit',
+  clipboardWrite: 'clipboard:write',
   modelProfileDescribe: 'model:profileDescribe',
   agentSetEffort: 'agent:setEffort',
   voiceProbe: 'voice:probe',
@@ -425,6 +426,10 @@ export interface Api {
   mcp: {
     /** Live connection status of each configured MCP server (for the Settings UI). */
     status(): Promise<MCPServerStatus[]>
+  }
+  clipboard: {
+    /** Copy via the main process, which (unlike navigator.clipboard) needs no document focus. */
+    write(text: string): Promise<boolean>
   }
   lmstudio: {
     /** Probe any OpenAI-compatible backend; defaults to the active connection when no args given. */

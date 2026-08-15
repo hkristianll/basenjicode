@@ -37,6 +37,9 @@ const api: Api = {
   mcp: {
     status: () => ipcRenderer.invoke(IPC.mcpStatus)
   },
+  clipboard: {
+    write: (text: string) => ipcRenderer.invoke(IPC.clipboardWrite, text)
+  },
   lmstudio: {
     probe: (p) => ipcRenderer.invoke(IPC.lmstudioProbe, p),
     models: (p) => ipcRenderer.invoke(IPC.lmstudioModels, p),

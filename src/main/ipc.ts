@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, dialog, app } from 'electron'
+import { ipcMain, BrowserWindow, dialog, app, clipboard } from 'electron'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -876,6 +876,19 @@ export function registerIpc(): void {
   })
   ipcMain.handle(IPC.hermesCancel, () => {
     for (const s of brookeSessions.values()) s.cancel()
+  })
+
+  // Copy via the main process. navigator.clipboard needs the document to be FOCUSED, which it is not
+  // whenever the Preview <webview> or devtools holds focus — there it throws "Document is not focused"
+  // and the copy silently does nothing. Electron's clipboard has no such precondition.
+  ipcMain.handle(IPC.clipboardWrite, (_e, text: string): boolean => {
+    if (typeof text !== 'string' || !text) return false
+    try {
+      clipboard.writeText(text)
+      return true
+    } catch {
+      return false
+    }
   })
 
   ipcMain.handle(IPC.settingsGet, () => settings)
