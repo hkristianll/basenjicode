@@ -5,9 +5,17 @@ import path from 'node:path'
 import { IPC, type PreviewControl } from '../shared/ipc-types'
 import { log } from './logger'
 import { isBlockedHostForPreview } from './web-util'
-import { type ConsoleLine, type ConsoleLevel, parseConsoleMessage, filterByLevel } from './preview-util'
+import { type ConsoleLine, type ConsoleLevel, type Viewport, parseConsoleMessage, filterByLevel, normalizeViewport } from './preview-util'
 
 export type { ConsoleLine, ConsoleLevel } from './preview-util'
+
+export interface ScreenshotResult {
+  path: string
+  width: number
+  height: number
+  /** The viewport the page was rendered at, or null when this is just the panel's own size. */
+  emulated: Viewport | null
+}
 
 export interface PreviewInfo {
   available: boolean
@@ -26,6 +34,7 @@ export class PreviewUnavailable extends Error {
 import { fileStamp } from './time-util'
 
 const MAX_CONSOLE = 300
+const RELAYOUT_SETTLE_MS = 250 // let an emulated resize finish reflowing before capturing
 const SNAPSHOT_MAX_TEXT = 8000
 const EVAL_MAX_TEXT = 10_000 // cap preview_eval results, symmetric with web_fetch (15k) / snapshot (8k)
 
@@ -142,15 +151,83 @@ export class PreviewService {
     return out
   }
 
-  async screenshot(timeoutMs = 15_000): Promise<{ path: string; width: number; height: number }> {
+  /**
+   * Capture the previewed page. With no `opts`, this captures the Preview panel exactly as laid out —
+   * whatever shape the user happens to have dragged it to. Pass width/height to render at a specific
+   * viewport instead, so `100vh` and media queries evaluate against the size the agent is reasoning
+   * about rather than the panel's incidental one.
+   */
+  async screenshot(opts: { width?: number; height?: number } = {}, timeoutMs = 15_000): Promise<ScreenshotResult> {
     const g = this.requireGuest()
+    const want = normalizeViewport(opts)
+    if (!want) return this.capturePanel(g, timeoutMs)
+    try {
+      return await this.captureAtViewport(g, want, timeoutMs)
+    } catch (e) {
+      // Emulation is best-effort (the debugger can be occupied by open devtools). A panel-sized shot
+      // with `emulated: null` is still useful, and the tool tells the model which one it got.
+      log('ERROR', `preview: ${want.width}×${want.height} capture failed (${String(e)}) — falling back to the panel size`)
+      return this.capturePanel(g, timeoutMs)
+    }
+  }
+
+  private async capturePanel(g: WebContents, timeoutMs: number): Promise<ScreenshotResult> {
     const img = await withTimeout(g.capturePage(), timeoutMs)
     const { width, height } = img.getSize()
+    return { path: this.writeShot(img.toPNG()), width, height, emulated: null }
+  }
+
+  /**
+   * Render at an exact viewport via CDP device-metrics emulation. `capturePage()` cannot do this —
+   * it only ever returns the panel as it currently sits, which is why a landscape layout reviewed in
+   * a tall narrow panel reads as broken and sends the agent chasing phantom overflow.
+   */
+  private async captureAtViewport(g: WebContents, view: Viewport, timeoutMs: number): Promise<ScreenshotResult> {
+    const dbg = g.debugger
+    // Devtools (or a previous caller) may already own the debugger; borrow it and leave it attached.
+    const preAttached = dbg.isAttached()
+    if (!preAttached) dbg.attach('1.3')
+    try {
+      await withTimeout(
+        dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
+          width: view.width,
+          height: view.height,
+          deviceScaleFactor: 1,
+          mobile: false
+        }),
+        timeoutMs
+      )
+      // Media queries and vh units re-evaluate synchronously, but transitions and webfont reflow land
+      // a frame or two later — capturing immediately catches the layout mid-move.
+      await delay(RELAYOUT_SETTLE_MS)
+      const shot = (await withTimeout(dbg.sendCommand('Page.captureScreenshot', { format: 'png' }), timeoutMs)) as {
+        data: string
+      }
+      return { path: this.writeShot(Buffer.from(shot.data, 'base64')), width: view.width, height: view.height, emulated: view }
+    } finally {
+      // ALWAYS restore, on the error path too: a leaked override leaves the user's Preview panel stuck
+      // at the emulated size long after the tool call returned.
+      try {
+        await dbg.sendCommand('Emulation.clearDeviceMetricsOverride')
+      } catch {
+        /* guest already gone */
+      }
+      if (!preAttached) {
+        try {
+          dbg.detach()
+        } catch {
+          /* already detached */
+        }
+      }
+    }
+  }
+
+  private writeShot(png: Buffer): string {
     const dir = path.join(app.getPath('temp'), 'nordcode-preview')
     fs.mkdirSync(dir, { recursive: true })
     const file = path.join(dir, `preview-${fileStamp()}-${randomUUID().slice(0, 6)}.png`)
-    fs.writeFileSync(file, img.toPNG())
-    return { path: file, width, height }
+    fs.writeFileSync(file, png)
+    return file
   }
 
   // ---- internals ----
@@ -288,6 +365,10 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
       }
     )
   })
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function safeCall<T>(fn: () => T, fallback: T): T {
