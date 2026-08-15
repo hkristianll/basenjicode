@@ -54,6 +54,11 @@ export class SafetyController {
     this.mode = mode
   }
 
+  /** Keep the shell screener's outside-workspace check anchored to the live root after set_working_folder. */
+  setWorkspaceRoot(root: string): void {
+    this.screening.workspaceRoot = root
+  }
+
   getAllowList(): AllowList {
     return {
       tools: [...this.allowAlwaysTool],

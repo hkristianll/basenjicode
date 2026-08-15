@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, dialog, app } from 'electron'
+import { ipcMain, BrowserWindow, dialog, app, clipboard } from 'electron'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -20,7 +20,7 @@ import { runTicketWithCheck, runReview, writeRejectionFeedback, BOARD_DRIVING_TO
 import { runHermes, runCritic, applyReplanDiff, withRoleBanner, hermesRunConfig, type StuckTicket } from './agent/specOrchestrator'
 import { normalizeRole, departmentOf } from './agent/specPlan'
 import { canonicalizeProject, resolveRaidCwd } from './loop-safety'
-import { validateCheck, rewriteCheck } from './agent/checkLint'
+import { checkPromptRules, rewriteCheck, shellCheckLabel, validateCheck } from './agent/checkLint'
 import { setHermesController, type HermesController } from './agent/hermesControl'
 import { createPauseGate } from './agent/pauseGate'
 import { createSingleFlight } from './agent/singleFlight'
@@ -96,14 +96,38 @@ let lastActiveConnId = ''
 // per model per session, not on every turn. Reset on a connection switch (alongside modelContextLengths).
 const cappedNotified = new Set<string>()
 
+/**
+ * The context window a turn will ACTUALLY run with: the configured setting, trimmed to the model's real
+ * loaded length when LM Studio reports one. A user can set 150k while the GPU only loaded 134107, and
+ * every consumer must agree on the smaller number — the compaction threshold and the UI meter included.
+ */
+function effectiveContextLimit(): number {
+  const conn = activeConnection(settings)
+  const ctxLimit = conn.contextLimitTokens ?? settings.contextLimitTokens
+  const real = modelContextLengths[conn.model]
+  return real ? Math.min(ctxLimit, real) : ctxLimit
+}
+
+/**
+ * Push the effective cap to the renderer. Without this the meter only learns the real window from a
+ * `usage` event, i.e. after the first reply — so a freshly opened session displayed the raw setting and
+ * overstated the headroom (the "51k / 150k" report, where the true cap was 134107).
+ */
+function pushContextLimit(): void {
+  BrowserWindow.getAllWindows()[0]?.webContents.send(IPC.contextLimit, effectiveContextLimit())
+}
+
 async function refreshContextLengths(): Promise<void> {
   const conn = activeConnection(settings)
   // LM Studio's native /api/v0/models reports real loaded context lengths; other backends don't expose it.
-  if (conn.kind !== 'lmstudio') return
-  const m = await fetchModelContextLengths(conn.baseURL)
-  // Only replace on a non-empty read so a transient fetch failure (or every model briefly unloaded)
-  // can't wipe a good cache and make us fall back to the raw setting mid-session.
-  if (Object.keys(m).length) modelContextLengths = m
+  // Non-LM-Studio backends still get a push: there the setting IS the effective cap, and the meter needs it.
+  if (conn.kind === 'lmstudio') {
+    const m = await fetchModelContextLengths(conn.baseURL)
+    // Only replace on a non-empty read so a transient fetch failure (or every model briefly unloaded)
+    // can't wipe a good cache and make us fall back to the raw setting mid-session.
+    if (Object.keys(m).length) modelContextLengths = m
+  }
+  pushContextLimit()
 }
 
 /**
@@ -225,10 +249,8 @@ function configFromSettings(): AgentConfig {
   // A connection's per-connection override wins; otherwise inherit the global Settings default.
   const temperature = conn.temperature ?? settings.temperature
   const maxTokens = conn.maxTokens ?? settings.maxTokens
-  const ctxLimit = conn.contextLimitTokens ?? settings.contextLimitTokens
-  const real = modelContextLengths[conn.model]
-  // Trim against the model's actual loaded context length when LM Studio reports it.
-  const trimmed = real ? Math.min(ctxLimit, real) : ctxLimit
+  // Single source of truth, shared with the meter push — the UI must never show a window the turn won't use.
+  const trimmed = effectiveContextLimit()
   const local = isLocalWeakModel(conn)
   return {
     model: conn.model,
@@ -278,7 +300,16 @@ function getOrCreateSession(sessionId: string): AgentSession | null {
     mode: persisted.mode,
     history: persisted.messages,
     allowList: persisted.allowList,
-    tokenScale: persisted.tokenScale
+    tokenScale: persisted.tokenScale,
+    // set_working_folder persistence: re-read from disk so only cwd changes — the live transcript is
+    // saved by its own turn-end path. Presence of this hook is what grants chat the re-root capability.
+    onWorkspaceChange: (root) => {
+      const s = loadSession(sessionId)
+      if (s) {
+        s.cwd = root
+        saveSession(s)
+      }
+    }
   })
   sessions.set(sessionId, session)
   return session
@@ -565,8 +596,8 @@ export function registerIpc(): void {
         const prompt =
           `The team is STUCK and these tickets are unfinished:\n${lines}\n\n` +
           'This team runs UNATTENDED. Resolve it yourself with your tools - do NOT ask the user to choose between options and do NOT just describe the problem. ' +
-          'Often the WORK is done and only the CHECK is broken or impossible: a bash idiom that fails in PowerShell (test -f / grep / 2>/dev/null / &&), an unparenthesized `Test-Path a -and Test-Path b`, or a check for files no ticket creates (e.g. a `pytest` / `npm test` check when the project has no test files). ' +
-          'For EACH stuck ticket take a concrete action NOW: if its CHECK is broken or impossible, FIX it in place with edit_ticket (a corrected PowerShell check like `npm run build` / `pytest` / `npx tsc --noEmit`) and reopen_ticket it - do NOT cancel-and-refile a duplicate; cancel only a ticket that is genuinely out of scope or impossible; or reopen one that is just blocked. ' +
+          `Often the WORK is done and only the CHECK is broken or impossible: syntax for a different shell, invalid condition/chaining syntax, or a check for files no ticket creates (e.g. a \`pytest\` / \`npm test\` check when the project has no test files). ${checkPromptRules()} ` +
+          `For EACH stuck ticket take a concrete action NOW: if its CHECK is broken or impossible, FIX it in place with edit_ticket (a corrected ${shellCheckLabel()} check like \`npm run build\` / \`pytest\` / \`npx tsc --noEmit\`) and reopen_ticket it - do NOT cancel-and-refile a duplicate; cancel only a ticket that is genuinely out of scope or impossible; or reopen one that is just blocked. ` +
           'When the only work left is unresolvable, cancel it so the project can complete. Act with your tools now.'
         if (session.isBusy()) session.enqueueSteer(prompt)
         else await session.runTurn(prompt, randomUUID(), hermesEmit)
@@ -856,7 +887,23 @@ export function registerIpc(): void {
     for (const s of brookeSessions.values()) s.cancel()
   })
 
+  // Copy via the main process. navigator.clipboard needs the document to be FOCUSED, which it is not
+  // whenever the Preview <webview> or devtools holds focus — there it throws "Document is not focused"
+  // and the copy silently does nothing. Electron's clipboard has no such precondition.
+  ipcMain.handle(IPC.clipboardWrite, (_e, text: string): boolean => {
+    if (typeof text !== 'string' || !text) return false
+    try {
+      clipboard.writeText(text)
+      return true
+    } catch {
+      return false
+    }
+  })
+
   ipcMain.handle(IPC.settingsGet, () => settings)
+  // Pull as well as push: the startup refresh can land before the window exists, so the renderer asks
+  // once on mount and then just listens.
+  ipcMain.handle(IPC.contextLimit, () => effectiveContextLimit())
   ipcMain.handle(IPC.settingsSet, (_e, patch: Partial<Settings>) => {
     settings = updateSettings(patch)
     rebuildClient()

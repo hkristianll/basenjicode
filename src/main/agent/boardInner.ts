@@ -8,7 +8,7 @@ import { AgentSession, type AgentConfig } from './loop'
 import { createConnectionClient } from './lmstudio'
 import { ensureModelLoaded } from '../lmstudio/loadModel'
 import { freeOtherRoleModels } from './modelSwap'
-import { runPowerShell } from '../shell/powershell'
+import { runShell } from '../shell/powershell'
 import { runGit } from '../git'
 import { LIMITS, truncateMiddle } from './util'
 import type { AgentEvent, LoopConfig } from '../../shared/ipc-types'
@@ -18,6 +18,7 @@ import { buildSeedMessage, captureTurn, fetchSpec, type TicketTurnResult } from 
 import { pickRelevantFiles } from './relevantFiles'
 import { departmentOf } from './specPlan'
 import { readTeamMemory } from './teamMemory'
+import { readProjectPlaybook } from './projectPlaybook'
 import type { ToolRegistry } from './registry'
 import type { CheckOutcome } from './boardDecide'
 import { parseVerdict, type ReviewVerdict } from './boardReview'
@@ -59,7 +60,9 @@ function pickWorkerRegistry(base: ToolRegistry, ticket: BoardTicket): ToolRegist
   // Strip `task` (sub-agent delegation) from EVERY board worker: a focused ticket should implement its own files,
   // not spawn a child agent on another connection — that loads a SECOND model (VRAM overcommit + churn) and an
   // agentic-tuned coder reaches for it readily. Review workers also lose the edit tools.
-  return departmentOf(ticket.body) === 'review' ? base.without([...REVIEW_EDIT_TOOLS, 'task']) : base.without(['file_finding', 'task'])
+  return departmentOf(ticket.body) === 'review'
+    ? base.without([...REVIEW_EDIT_TOOLS, 'task', 'set_working_folder'])
+    : base.without(['file_finding', 'task', 'set_working_folder'])
 }
 
 // A ticket is a focused unit of work, but it must be a REACHABLE one. Telemetry (turns.jsonl, board:true vs
@@ -180,7 +183,8 @@ async function runSession(
   // Point the worker at the files relevant to THIS ticket (cheap server-side scan, recomputed per turn so it
   // reflects edits) so it doesn't read the whole codebase to start. Paired with the lean directive in the seed.
   const relevantFiles = pickRelevantFiles(config.cwd, ticket)
-  const seed = buildSeedMessage(ticket, spec, opts.revision, opts.approvedPlan, priorProgress, opts.leadBrief, relevantFiles)
+  const projectPlaybook = readProjectPlaybook(config.cwd)
+  const seed = buildSeedMessage(ticket, spec, opts.revision, opts.approvedPlan, priorProgress, opts.leadBrief, relevantFiles, projectPlaybook)
   const turnId = randomUUID()
 
   // Fresh session per turn: empty history, shared registry. 'auto' = full auto-approve; 'plan' = read-only
@@ -193,7 +197,12 @@ async function runSession(
     // worker's file_finding file into THIS ticket's project; workerRole scopes its prompt to one ticket + its
     // real tools (so a restricted worker doesn't flail calling tools it doesn't have).
     registry: pickWorkerRegistry(deps.registry, ticket),
-    config: { ...agentConfig, hermesProject: ticket.project, workerRole: departmentOf(ticket.body) ?? undefined },
+    config: {
+      ...agentConfig,
+      hermesProject: ticket.project,
+      workerRole: departmentOf(ticket.body) ?? undefined,
+      relevantFiles
+    },
     mode: opts.mode ?? 'auto',
     history: []
   })
@@ -279,7 +288,7 @@ async function persistPlan(ticket: BoardTicket, config: LoopConfig, plan: string
 
 async function runCheck(command: string, cwd: string, signal?: AbortSignal): Promise<CheckOutcome> {
   // The runner's per-ticket signal cancels a long check on Stop; fall back to a never-aborted one when absent.
-  const res = await runPowerShell({ command, cwd, timeoutMs: LIMITS.SHELL_TIMEOUT_MS, signal: signal ?? new AbortController().signal })
+  const res = await runShell({ command, cwd, timeoutMs: LIMITS.SHELL_TIMEOUT_MS, signal: signal ?? new AbortController().signal })
   const output = [res.stdout, res.stderr].filter(Boolean).join('\n').trim()
   return { passed: res.code === 0 && !res.timedOut, code: res.code, timedOut: res.timedOut, output: output || undefined }
 }

@@ -24,6 +24,7 @@ import { rememberTool, forgetTool } from './memory'
 import { hermesControlTools } from './hermesTools'
 import { fileFindingTool } from './fileFinding'
 import { escalateTool } from './escalate'
+import { setWorkingFolderTool } from './setWorkingFolder'
 import { DEFAULT_SETTINGS, type ImageConfig } from '../../../shared/domain-types'
 
 /**
@@ -74,6 +75,9 @@ export function buildRegistry(opts?: { imageGen?: boolean }): ToolRegistry {
   // Persistent project memory (capped .nordcode/memory.md, recalled across sessions).
   r.register(rememberTool)
   r.register(forgetTool)
+  // Chat-only: re-root the session at another project folder (workers are stripped of this in
+  // pickWorkerRegistry AND lack the backing ctx capability — belt and braces).
+  r.register(setWorkingFolderTool)
   return r
 }
 

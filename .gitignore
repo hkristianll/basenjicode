@@ -22,6 +22,8 @@ tmp/
 *.key
 settings.json
 modelProfiles.json
+# the manager's auto-memory, written into whatever directory the agent is working in
+brooke-memory.md
 
 # large local assets (models, media) — document download paths in README instead
 voice-sidecar/models/

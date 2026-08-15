@@ -11,6 +11,10 @@ import { MAX_DECOMPOSE_TICKETS, type DecomposePlan, type ReplanDiff } from './sp
 import { readTeamMemory, writeTeamMemory } from './teamMemory'
 import type { LoopConfig, BoardTicketRow, LoopEvent } from '../../shared/ipc-types'
 import type { Settings, ChatMessage, Connection } from '../../shared/domain-types'
+import { shellFamily } from '../shell/powershell'
+import { shellCheckLabel } from './checkLint'
+
+const existenceCheck = (path: string): string => (shellFamily() === 'powershell' ? `Test-Path ${path}` : `test -e ${path}`)
 
 // A fake board: assigns incrementing ids and records every create + status change so we can assert behaviour.
 function fakeBoard(): BoardWriteIO & { specs: string[]; creates: NewTicket[]; statuses: { id: number; status: string }[] } {
@@ -628,7 +632,7 @@ describe('runDecompose + diff fallbacks (Q2)', () => {
 
   it('rejects an existence-only check on an implementation ticket → repairs to a behavioral one', async () => {
     let calls = 0
-    const weak = '{"spec":"s","tickets":[{"title":"A* pathfinding","check":"Test-Path src/path.ts","role":"implementation"}]}'
+    const weak = JSON.stringify({ spec: 's', tickets: [{ title: 'A* pathfinding', check: existenceCheck('src/path.ts'), role: 'implementation' }] })
     const good = '{"spec":"s","tickets":[{"title":"A* pathfinding","check":"npx tsc --noEmit","role":"implementation"}]}'
     const deps: OrchestratorDeps = { settings: {} as Settings, complete: async () => (++calls === 1 ? weak : good) }
     const plan = await runDecompose('goal', cfgX, deps)
@@ -639,20 +643,23 @@ describe('runDecompose + diff fallbacks (Q2)', () => {
   it('staged decompose: an OUTLINE (no body/check) gets body+check filled by the detail pass', async () => {
     let detailCalls = 0
     const outline = '{"spec":"game spec","tickets":[{"title":"Scaffold","role":"architecture","deps":[]},{"title":"A* pathfinding","role":"implementation","deps":[0]}]}'
-    const detail = (): string => { detailCalls++; return '{"tickets":[{"index":0,"body":"set up vite+ts","check":"Test-Path package.json"},{"index":1,"body":"implement A* (shortest path, obstacles, unreachable→null)","check":"npm test"}]}' }
+    const detail = (): string => {
+      detailCalls++
+      return JSON.stringify({ tickets: [{ index: 0, body: 'set up vite+ts', check: existenceCheck('package.json') }, { index: 1, body: 'implement A* (shortest path, obstacles, unreachable→null)', check: 'npm test' }] })
+    }
     const deps: OrchestratorDeps = { settings: {} as Settings, complete: cannedComplete({ decompose: outline, detail }) }
     const plan = await runDecompose('build a game', cfgX, deps)
     expect(plan.spec).toBe('game spec')
     expect(detailCalls).toBe(1) // both tickets fit one batch — content generated in a piece, not all at once
     expect(plan.tickets[0].body).toBe('set up vite+ts')
-    expect(plan.tickets[0].check).toBe('Test-Path package.json') // existence check kept for an ARCHITECTURE ticket
+    expect(plan.tickets[0].check).toBe(existenceCheck('package.json')) // existence check kept for an ARCHITECTURE ticket
     expect(plan.tickets[1].body).toContain('A*')
     expect(plan.tickets[1].check).toBe('npm test') // behavioral check kept for implementation
   })
 
   it('detail pass is defensive: a missing ticket → title body + behavioral floor; an existence check on review → none', async () => {
     const outline = '{"spec":"s","tickets":[{"title":"Build the thing","role":"implementation","deps":[]},{"title":"Audit the look","role":"review","deps":[0]}]}'
-    const detail = '{"tickets":[{"index":1,"body":"audit it","check":"Test-Path src"}]}' // omits index 0; gives review a bad check
+    const detail = JSON.stringify({ tickets: [{ index: 1, body: 'audit it', check: existenceCheck('src') }] }) // omits index 0; gives review a bad check
     const deps: OrchestratorDeps = { settings: {} as Settings, complete: cannedComplete({ decompose: outline, detail }) }
     const plan = await runDecompose('goal', cfgX, deps)
     expect(plan.tickets[0].body).toBe('Build the thing') // title-as-body fallback for the omitted ticket
@@ -674,11 +681,14 @@ describe('runDecompose + diff fallbacks (Q2)', () => {
     let calls = 0
     const deps: OrchestratorDeps = {
       settings: {} as Settings,
-      complete: async () => { calls++; return '{"spec":"s","tickets":[{"title":"README","check":"Test-Path README.md","role":"docs"}]}' }
+      complete: async () => {
+        calls++
+        return JSON.stringify({ spec: 's', tickets: [{ title: 'README', check: existenceCheck('README.md'), role: 'docs' }] })
+      }
     }
     const plan = await runDecompose('goal', cfgX, deps)
     expect(calls).toBe(1) // accepted on the first try — docs tickets may gate on file existence
-    expect(plan.tickets[0].check).toBe('Test-Path README.md')
+    expect(plan.tickets[0].check).toBe(existenceCheck('README.md'))
   })
 
   it('rejects a multi-module plan with NO integration/wire-up ticket → reject-and-repair', async () => {
@@ -782,7 +792,7 @@ describe('runDecompose + diff fallbacks (Q2)', () => {
     const board = [{ id: 9, status: 'todo', title: 'broken-check ticket' }] as unknown as BoardTicketRow[]
     await runReplan('goal', 'spec', board, [9], cfgX, deps, undefined, { 9: 'check-broken: uses bash test -f' })
     expect(userMsg).toContain('#9: check-broken')
-    expect(userMsg).toMatch(/CORRECTED PowerShell check/i)
+    expect(userMsg).toContain(`CORRECTED ${shellCheckLabel()} check`)
   })
 
   it('R4: a plain (non-check-broken) park reason is shown without the corrected-check directive', async () => {
@@ -796,7 +806,7 @@ describe('runDecompose + diff fallbacks (Q2)', () => {
     }
     await runReplan('goal', 'spec', [{ id: 4, status: 'todo', title: 'X' }] as unknown as BoardTicketRow[], [4], cfgX, deps, undefined, { 4: 'parked after 3 attempts — check still failing (exit 1)' })
     expect(userMsg).toContain('#4')
-    expect(userMsg).not.toMatch(/CORRECTED PowerShell check/i)
+    expect(userMsg).not.toContain(`CORRECTED ${shellCheckLabel()} check`)
   })
 })
 

@@ -49,9 +49,71 @@ export function parseConsoleMessage(args: unknown[]): { level: ConsoleLevel; mes
   return { level: normalizeLevel(args[1]), message: String(args[2] ?? '') }
 }
 
+export interface Viewport {
+  width: number
+  height: number
+}
+
+/** Guard rails for an emulated viewport: below MIN nothing lays out, above MAX the PNG gets huge. */
+export const VIEWPORT_MIN = 240
+export const VIEWPORT_MAX = 4096
+
+function clampDim(v: number): number {
+  return Math.min(VIEWPORT_MAX, Math.max(VIEWPORT_MIN, Math.round(v)))
+}
+
+function usableDim(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? clampDim(v) : null
+}
+
+/**
+ * Resolve the viewport a screenshot should render at. Returns null when neither dimension was
+ * given — meaning "capture the Preview panel at whatever size it happens to be", the old behaviour.
+ *
+ * A single dimension is completed to 16:9 rather than rejected: the model usually asks in the form
+ * "check it at 1920", and bouncing that back to ask for a second number costs a whole turn.
+ */
+export function normalizeViewport(opts: { width?: number; height?: number }): Viewport | null {
+  const w = usableDim(opts.width)
+  const h = usableDim(opts.height)
+  if (w === null && h === null) return null
+  if (w !== null && h !== null) return { width: w, height: h }
+  if (w !== null) return { width: w, height: clampDim((w * 9) / 16) }
+  return { width: clampDim((h as number) * (16 / 9)), height: h as number }
+}
+
 /** Keep only messages at `min` level or above (error > warning > info/log > debug). */
 export function filterByLevel(lines: ConsoleLine[], min?: ConsoleLevel): ConsoleLine[] {
   if (!min) return lines
   const rank = LEVEL_RANK[min]
   return lines.filter((l) => LEVEL_RANK[l.level] >= rank)
+}
+
+export interface NetworkDiagnosticInput {
+  url: string
+  method?: string
+  resourceType?: string
+  statusCode?: number
+  error?: string
+}
+
+/** Turn failed subresources/API calls into one compact, credential-safe line for the agent. */
+export function formatNetworkDiagnostic(input: NetworkDiagnosticInput): string | null {
+  if (input.resourceType === 'mainFrame') return null // did-fail-load reports this with better detail
+  if (input.error === 'net::ERR_ABORTED') return null // normal during reload/navigation
+  if (!input.error && (input.statusCode === undefined || input.statusCode < 400)) return null
+
+  let target = input.url
+  try {
+    const url = new URL(input.url)
+    // Paths diagnose missing assets/API routes; credentials and query values do not belong in model context.
+    target = `${url.origin}${url.pathname}${url.search ? '?…' : ''}`
+  } catch {
+    // Keep the original string when Electron supplies a non-standard URL.
+  }
+  if (target.length > 400) target = `${target.slice(0, 399)}…`
+  const request = `${input.method || 'GET'} ${input.resourceType || 'resource'} ${target}`
+  return input.error
+    ? `[network] ${request} failed (${input.error})`
+    : `[network] ${request} returned HTTP ${input.statusCode}`
 }

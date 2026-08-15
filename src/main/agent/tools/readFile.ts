@@ -34,7 +34,7 @@ export const readFileTool: ToolDef<typeof schema> = {
     const buf = await fs.readFile(abs)
     if (buf.includes(0)) return `ERROR: file appears to be binary: ${args.path}`
     // Only a FULL read arms write_file's clobber guard — a ranged read saw just a slice.
-    ctx.reads.record(abs, stat.mtimeMs, !ranged)
+    ctx.reads.recordFileRead(abs, stat.mtimeMs, !ranged)
 
     const lines = buf.toString('utf8').split('\n')
     const start = Math.max(0, (args.start_line ?? 1) - 1)

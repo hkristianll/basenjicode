@@ -8,6 +8,8 @@ export interface AttentionItem {
   title: string
   detail: string
   source?: string
+  /** A newly-visible item should alert the user when the app is unfocused. */
+  notify?: boolean
 }
 
 const TONE_ICON: Record<AttentionTone, IconName> = {

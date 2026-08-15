@@ -30,6 +30,7 @@ Developed and battle-tested against **Qwen 3.8 27B on LM Studio**: the harness t
 ### Agent capabilities
 
 - Chat mode with tool use: read/write/edit/multi-edit files, grep/glob, shell, background tasks.
+- The agent can switch the chat's working folder (`set_working_folder`) — "new project, make a folder for it" re-roots the session, and the Git panel and top bar follow.
 - Live in-app preview pane with screenshot feedback to the model.
 - Task/todo tracking panel.
 - Approval gates for risky actions with undoable edits and per-turn snapshots + rewind.
@@ -37,6 +38,23 @@ Developed and battle-tested against **Qwen 3.8 27B on LM Studio**: the harness t
 - Loop mode: autonomously drains the ticket board one ticket at a time with per-ticket verification.
 - Hermes orchestrator: give it a big goal; it decomposes, executes, and replans.
 - Multi-model role assignment: planner/coder/reviewer can be different models.
+
+### Project playbook
+
+Loop workers automatically see verification scripts from the project's `package.json`. To add a reusable definition
+of done, create `basenjicode.playbook.json` in the project root:
+
+```json
+{
+  "definitionOfDone": [
+    "No new TypeScript errors",
+    "Relevant tests pass",
+    "User-facing behavior is documented"
+  ]
+}
+```
+
+The playbook is injected into every ticket seed; the ticket's own verification check remains mandatory.
 
 ## Benchmarking
 
@@ -55,7 +73,7 @@ BasenjiCode ships with a task-based benchmark harness (`bench/`) that scores age
 
 ## Requirements
 
-- Windows 10/11 (for now)
+- Windows 10/11, macOS, or Linux
 - Node 22+ and npm
 - A local model server (LM Studio or Ollama) OR a cloud API key
 - Recommended local model: **Qwen 3.8 27B** (the reference model the harness is benchmarked against); any recent 27B-class instruct/thinking model runs well on a single 24 GB GPU

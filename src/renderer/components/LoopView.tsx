@@ -4,6 +4,7 @@ import { TicketDetail } from './TicketDetail'
 import { LoopChat } from './LoopChat'
 import { useLoopBoard } from '../hooks/useLoopBoard'
 import { useResizable } from '../hooks/useResizable'
+import { notifyWhenUnfocused } from '../attentionNotifications'
 import { verbOf, argTarget, shortArg } from '../toolVerb'
 import type { Settings } from '../../shared/domain-types'
 import type { LoopConfig, LoopEvent, LoopRunState, LoopStatus } from '../../shared/ipc-types'
@@ -43,24 +44,6 @@ function projectedStop(a: {
   if (top.r < 0.5) return null
   const verb = top.r >= 0.95 ? 'stopping soon' : top.r >= 0.8 ? `nearing ${top.k} budget` : `${top.k} budget`
   return `${verb} — ${top.left}`
-}
-
-/** Desktop notification — only when the window is NOT focused (nobody watching an overnight drain wants
- *  a ping while they're staring at it). Best-effort: silently no-ops if notifications are unavailable. */
-function notify(title: string, body: string): void {
-  try {
-    if (typeof document !== 'undefined' && document.hasFocus()) return
-    if (typeof Notification === 'undefined') return
-    if (Notification.permission === 'granted') {
-      new Notification(title, { body })
-    } else if (Notification.permission !== 'denied') {
-      void Notification.requestPermission().then((p) => {
-        if (p === 'granted') new Notification(title, { body })
-      })
-    }
-  } catch {
-    /* notifications unavailable */
-  }
 }
 
 /** NordCode's "Loop" tab: configure + drive an autonomous board-draining run, watch it live. */
@@ -133,11 +116,11 @@ export function LoopView({
       }
       if (e.kind === 'stopped') {
         setRunState('stopped')
-        notify('Run finished', `Run stopped - ${e.reason}`)
+        notifyWhenUnfocused('Run finished', `Run stopped - ${e.reason}`)
       }
       if (e.kind === 'paused') setRunState('paused')
-      if (e.kind === 'ticket-failed') notify(`Ticket #${e.id} failed`, e.error)
-      if (e.kind === 'ticket-done' && e.terminal === 'park') notify(`Ticket #${e.id} parked`, 'Needs your attention.')
+      if (e.kind === 'ticket-failed') notifyWhenUnfocused(`Ticket #${e.id} failed`, e.error)
+      if (e.kind === 'ticket-done' && e.terminal === 'park') notifyWhenUnfocused(`Ticket #${e.id} parked`, 'Needs your attention.')
       setFeed((f) => [...f, e])
     })
     return () => unsub()

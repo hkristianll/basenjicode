@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import type { ReviewVerdict } from './boardReview'
 import { selectParallelBatch } from './parallelBatch'
 import { filesOf } from './specPlan'
-import { runPowerShell } from '../shell/powershell'
+import { runShell } from '../shell/powershell'
 
 // The board lives at the same place kanban.ts documents (REST, no MCP client needed).
 const BOARD_URL = (process.env.TICKET_BOARD_URL || 'http://127.0.0.1:8930').replace(/\/+$/, '')
@@ -155,10 +155,10 @@ export class BoardRunner {
   emit: (e: LoopEvent) => void = defaultEmit
   /** Git seam — production uses runGit; tests inject a no-op so no real branch/commit happens. */
   git: (cwd: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }> = runGit
-  /** Shell seam for non-git commands (e.g. `npm install` in ensureDeps). Production runs PowerShell; tests inject a
+  /** Shell seam for non-git commands (e.g. `npm install` in ensureDeps). Production runs the platform shell; tests inject a
    *  no-op so no real install happens. */
   runCmd: (command: string, cwd: string, timeoutMs: number) => Promise<{ code: number | null; timedOut: boolean }> = (command, cwd, timeoutMs) =>
-    runPowerShell({ command, cwd, timeoutMs, signal: this.abort?.signal ?? new AbortController().signal })
+    runShell({ command, cwd, timeoutMs, signal: this.abort?.signal ?? new AbortController().signal })
   /** Write a default .gitignore on auto-init (injectable so tests never touch disk). */
   writeIgnore: (cwd: string, content: string) => void = (cwd, content) => {
     const p = join(cwd, '.gitignore')

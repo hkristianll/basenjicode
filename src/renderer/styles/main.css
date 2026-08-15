@@ -4739,6 +4739,27 @@ button {
 .diff .dl:not(:has(.dlg)) {
   padding: 0 3px;
 }
+.diff-context-action {
+  position: fixed;
+  z-index: var(--z-overlay);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-xs);
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: var(--shadow-md);
+  font: 600 12px/1 var(--sans);
+  cursor: pointer;
+}
+.diff-context-action:hover,
+.diff-context-action:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+  outline: none;
+}
 
 .approval {
   display: flex;

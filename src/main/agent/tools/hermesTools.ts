@@ -5,6 +5,10 @@
 import { z } from 'zod'
 import type { ToolDef } from '../registry'
 import { hermesController } from '../hermesControl'
+import { checkPromptRules, shellCheckLabel } from '../checkLint'
+
+const CHECK_SHELL = shellCheckLabel()
+const CHECK_RULES = checkPromptRules()
 
 const startGoalTool: ToolDef<z.ZodObject<{ goal: z.ZodString }>> = {
   name: 'start_goal',
@@ -71,12 +75,12 @@ const editTicketTool: ToolDef<
   description:
     'Edit a ticket IN PLACE — fix a broken/impossible CHECK, refine the body/acceptance criteria, or change priority — ' +
     'WITHOUT cancelling and re-filing a duplicate. This is the right tool when a ticket parked because its check was ' +
-    'wrong (a bash idiom that fails in PowerShell, a check for files no ticket creates, etc.): pass a corrected ' +
-    'PowerShell check here, then reopen_ticket so the team re-runs it. Only the fields you pass change.',
+    `wrong (syntax for a different shell, a check for files no ticket creates, etc.): pass a corrected ${CHECK_SHELL} ` +
+    `check here, then reopen_ticket so the team re-runs it. ${CHECK_RULES} Only the fields you pass change.`,
   schema: z.object({
     id: z.number().int().positive().describe('Ticket id to edit.'),
     body: z.string().optional().describe('New body / acceptance criteria.'),
-    check: z.string().optional().describe('New PowerShell check command (npm test / pytest / npx tsc --noEmit / npm run build).'),
+    check: z.string().optional().describe(`New ${CHECK_SHELL} check command (npm test / pytest / npx tsc --noEmit / npm run build).`),
     priority: z.number().int().optional().describe('New priority (lower runs earlier).')
   }),
   mutating: true,

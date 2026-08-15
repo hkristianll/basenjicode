@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 
 const ROOT = path.join(os.tmpdir(), 'nordcode-loop-guards-test')
 
@@ -106,5 +107,78 @@ describe('turns.jsonl board discriminator', () => {
     const rows = readTurns()
     expect(rows).toHaveLength(1)
     expect(rows[0].board).toBe(false)
+  })
+
+  it('records the Scout-premise counter when a relevant-file seed is supplied', async () => {
+    await runTurnWithId('loop-42-counter', { ...BASE, relevantFiles: [] })
+    const rows = readTurns()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].readsOutsideRelevantFiles).toBe(0)
+  })
+})
+
+// ---- model-reliability columns: completionTokens / genMs / toolFailures (#3) --------------------
+
+const usageChunk = (promptTokens: number, completionTokens: number): ChatChunk =>
+  ({ choices: [{ delta: {} }], usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens } }) as unknown as ChatChunk
+const toolChunk = (name: string, args: string): ChatChunk =>
+  ({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-1', function: { name, arguments: args } }] } }] }) as unknown as ChatChunk
+
+/** First completion calls one tool, second finishes clean; both deliver a usage chunk. */
+class ToolThenDoneConnection implements LLMConnection {
+  private completions = 0
+  async listModels(): Promise<string[]> {
+    return ['test-model']
+  }
+  async chatStream(_p: ChatStreamParams): Promise<AsyncIterable<ChatChunk> & { controller: AbortController }> {
+    this.completions++
+    const chunks =
+      this.completions === 1
+        ? [toolChunk('always_fails', '{"x":1}'), finishChunk('tool_calls'), usageChunk(10, 25)]
+        : [textChunk('All done.'), finishChunk('stop'), usageChunk(40, 15)]
+    async function* play(): AsyncGenerator<ChatChunk> {
+      for (const chunk of chunks) yield chunk
+    }
+    return Object.assign(play(), { controller: new AbortController() })
+  }
+  async chatComplete(): Promise<ChatCompletion> {
+    throw new Error('unused')
+  }
+}
+
+describe('turns.jsonl model-reliability columns', () => {
+  it('records completionTokens and genMs, and counts failed calls by tool name', async () => {
+    const registry = new ToolRegistry()
+    registry.register({
+      name: 'always_fails',
+      description: 'test tool that always fails',
+      schema: z.object({ x: z.number() }),
+      mutating: false,
+      handler: async () => 'ERROR: kaboom'
+    })
+    const session = new AgentSession({
+      id: 'reliability-test',
+      workspaceRoot: ROOT,
+      client: new ToolThenDoneConnection(),
+      registry,
+      config: BASE,
+      mode: 'ask',
+      history: []
+    })
+    await session.runTurn('do the thing', 'reliability-turn', () => {})
+    const rows = readTurns()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].completionTokens).toBe(40) // 25 + 15, accumulated across BOTH completions
+    expect(typeof rows[0].genMs).toBe('number')
+    expect(rows[0].genMs as number).toBeGreaterThanOrEqual(0)
+    expect(rows[0].toolFailures).toEqual({ always_fails: 1 })
+  })
+
+  it('omits toolFailures entirely on a turn where no tool failed', async () => {
+    await runTurnWithId('chat-clean-tools')
+    const rows = readTurns()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].toolFailures).toBeUndefined()
+    expect(rows[0].completionTokens).toBe(0) // DoneConnection never emits a usage chunk
   })
 })

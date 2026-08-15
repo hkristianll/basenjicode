@@ -37,10 +37,19 @@ const api: Api = {
   mcp: {
     status: () => ipcRenderer.invoke(IPC.mcpStatus)
   },
+  clipboard: {
+    write: (text: string) => ipcRenderer.invoke(IPC.clipboardWrite, text)
+  },
   lmstudio: {
     probe: (p) => ipcRenderer.invoke(IPC.lmstudioProbe, p),
     models: (p) => ipcRenderer.invoke(IPC.lmstudioModels, p),
-    profileDescribe: (model) => ipcRenderer.invoke(IPC.modelProfileDescribe, model)
+    profileDescribe: (model) => ipcRenderer.invoke(IPC.modelProfileDescribe, model),
+    contextLimit: () => ipcRenderer.invoke(IPC.contextLimit),
+    onContextLimit: (cb: (limit: number) => void) => {
+      const listener = (_e: unknown, limit: number): void => cb(limit)
+      ipcRenderer.on(IPC.contextLimit, listener)
+      return () => ipcRenderer.removeListener(IPC.contextLimit, listener)
+    }
   },
   voice: {
     probe: () => ipcRenderer.invoke(IPC.voiceProbe),

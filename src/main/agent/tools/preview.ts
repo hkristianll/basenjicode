@@ -22,6 +22,13 @@ function fmtConsole(lines: ConsoleLine[]): string {
     .join('\n')
 }
 
+/** Automatically feed newly-captured runtime/network problems into the model after preview operations. */
+function withDiagnostics(result: string): string {
+  const diagnostics = previewService.diagnostics()
+  if (!diagnostics.length) return result
+  return `${result}\n\nPreview diagnostics captured automatically:\n${fmtConsole(diagnostics)}`
+}
+
 const openSchema = z.object({
   url: z
     .string()
@@ -60,7 +67,7 @@ const openPreview: ToolDef<typeof openSchema> = {
     }
     const lines = [`Preview loaded: ${info.url}`, `Title: ${info.title || '(none)'}`]
     if (loadError) lines.push(`Load error: ${loadError}`)
-    return lines.join('\n')
+    return withDiagnostics(lines.join('\n'))
   }
 }
 
@@ -72,7 +79,7 @@ const reloadPreview: ToolDef<typeof emptySchema> = {
   async handler() {
     if (!previewService.hasGuest()) return NO_PREVIEW
     const { info, loadError } = await previewService.reload()
-    return loadError ? `Reloaded ${info.url} with a load error: ${loadError}` : `Reloaded ${info.url} (title: ${info.title || '(none)'}).`
+    return withDiagnostics(loadError ? `Reloaded ${info.url} with a load error: ${loadError}` : `Reloaded ${info.url} (title: ${info.title || '(none)'}).`)
   }
 }
 
@@ -94,6 +101,8 @@ const previewConsole: ToolDef<typeof consoleSchema> = {
   async handler(args) {
     if (!previewService.hasGuest()) return NO_PREVIEW
     const lines = previewService.consoleLines({ clear: args.clear, level: args.level })
+    // An explicit console read already put these diagnostics in model context; do not repeat them on the next tool.
+    previewService.diagnostics()
     const errs = lines.filter((l) => l.level === 'error').length
     const header = `${lines.length} message(s)${args.level ? ` at level ≥ ${args.level}` : ''}${errs ? `, ${errs} error(s)` : ''}:`
     return `${header}\n${fmtConsole(lines)}`
@@ -116,7 +125,7 @@ const snapshotPreview: ToolDef<typeof emptySchema> = {
         if (Array.isArray(v)) return v.length ? `${label}:\n  - ${v.join('\n  - ')}` : ''
         return v ? `${label}: ${String(v)}` : ''
       }
-      return [
+      return withDiagnostics([
         part('URL', o.url),
         part('Title', o.title),
         part('Headings', o.headings),
@@ -126,9 +135,9 @@ const snapshotPreview: ToolDef<typeof emptySchema> = {
         o.text ? `Visible text:\n${String(o.text)}` : ''
       ]
         .filter(Boolean)
-        .join('\n\n')
+        .join('\n\n'))
     } catch {
-      return json
+      return withDiagnostics(json)
     }
   }
 }
@@ -153,21 +162,41 @@ const evalPreview: ToolDef<typeof evalSchema> = {
   },
   async handler(args) {
     if (!previewService.hasGuest()) return NO_PREVIEW
-    return await previewService.evaluate(args.code)
+    return withDiagnostics(await previewService.evaluate(args.code))
   }
 }
 
-const screenshotPreview: ToolDef<typeof emptySchema> = {
+const screenshotSchema = z.object({
+  width: z
+    .number()
+    .optional()
+    .describe(
+      'Viewport width in CSS pixels to render at, e.g. 1920 for a desktop or presentation layout, 390 to check mobile.'
+    ),
+  height: z
+    .number()
+    .optional()
+    .describe('Viewport height in CSS pixels, e.g. 1080. If you give only one dimension the other is completed to 16:9.')
+})
+
+const screenshotPreview: ToolDef<typeof screenshotSchema> = {
   name: 'preview_screenshot',
   description:
     'Capture a PNG of the previewed page AND attach it for YOU to see — use this to VISUALLY REVIEW how the app ' +
     'actually looks (layout, art, colors, depth, polish), e.g. to judge a UI or game against its intended design and ' +
-    'route concrete look-gaps. Needs a vision-capable model to see the image; returns the saved path + dimensions too.',
-  schema: emptySchema,
+    'route concrete look-gaps. Needs a vision-capable model to see the image; returns the saved path + dimensions too. ' +
+    'Pass width/height to render at the viewport the page is MEANT for (a slide deck at 1920×1080, a phone layout at ' +
+    '390×844). Without them you get the Preview panel at whatever size the user dragged it to, which is often tall and ' +
+    'narrow — judging a landscape design there invents overflow that no real viewer will ever see.',
+  schema: screenshotSchema,
   mutating: false,
-  async handler(_args, ctx) {
+  preview(args): ToolPreview {
+    const at = args.width || args.height ? ` at ${args.width ?? 'auto'}×${args.height ?? 'auto'}` : ''
+    return { kind: 'text', text: `Screenshot preview${at}` }
+  },
+  async handler(args, ctx) {
     if (!previewService.hasGuest()) return NO_PREVIEW
-    const { path, width, height } = await previewService.screenshot()
+    const { path, width, height, emulated } = await previewService.screenshot({ width: args.width, height: args.height })
     // Feed the image back to the model (toModel) so a vision worker can actually SEE the rendered result and judge it.
     try {
       const b64 = (await readFile(path)).toString('base64')
@@ -175,7 +204,18 @@ const screenshotPreview: ToolDef<typeof emptySchema> = {
     } catch {
       /* if the read fails, the path below still lets the user open it */
     }
-    return `Captured a ${width}×${height} screenshot (${path}) and attached it above for your visual review.`
+    // Always say WHERE the size came from. An unlabelled "814×1074" reads as the design target, and the
+    // model then "fixes" a landscape layout to fit a panel nobody presents in.
+    const asked = args.width !== undefined || args.height !== undefined
+    let note: string
+    if (emulated) {
+      note = `rendered at the ${width}×${height} viewport you asked for`
+    } else if (asked) {
+      note = `captured at ${width}×${height} — the requested viewport could NOT be applied, so this is the Preview panel's own size, not a design target`
+    } else {
+      note = `captured at ${width}×${height} — that is the Preview panel's current size, NOT a design target. If the page targets a different viewport, re-shoot with width/height rather than restyling to fit this shape`
+    }
+    return withDiagnostics(`Screenshot ${note} (${path}), attached above for your visual review.`)
   }
 }
 

@@ -261,11 +261,35 @@ function Preview({ preview }: { preview: ToolPreview }) {
 
 /** Unified-diff renderer with a line-number gutter (old numbers for deletions, new for additions) and
  *  word-level intraline highlighting: on a modified line, only the span that changed is emphasised. */
-export function DiffView({ unified }: { unified: string }) {
+export function DiffView({ unified, onFixSelection }: { unified: string; onFixSelection?: (selection: string) => void }) {
   const rows = parseDiffRows(unified)
   const words = pairWordDiffs(rows)
+  const rootRef = useRef<HTMLPreElement>(null)
+  const [contextAction, setContextAction] = useState<{ x: number; y: number; selection: string } | null>(null)
+
+  function openContextAction(event: React.MouseEvent<HTMLPreElement>): void {
+    if (!onFixSelection) return
+    const selection = window.getSelection()
+    const root = rootRef.current
+    if (!selection || selection.isCollapsed || !root) return
+    if (!root.contains(selection.anchorNode) || !root.contains(selection.focusNode)) return
+    const text = selection.toString().trim()
+    if (!text) return
+    event.preventDefault()
+    setContextAction({
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 170)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 48)),
+      selection: text
+    })
+  }
+
   return (
-    <pre className="diff">
+    <pre
+      ref={rootRef}
+      className="diff"
+      onContextMenu={openContextAction}
+      title={onFixSelection ? 'Select diff lines and right-click to ask the agent to fix only that selection.' : undefined}
+    >
       {rows.map((r, i) => {
         const segs = words.get(i)
         return (
@@ -292,6 +316,25 @@ export function DiffView({ unified }: { unified: string }) {
           </div>
         )
       })}
+      {contextAction && (
+        <button
+          className="diff-context-action"
+          type="button"
+          style={{ left: contextAction.x, top: contextAction.y }}
+          autoFocus
+          onBlur={() => setContextAction(null)}
+          onMouseDown={(event) => event.preventDefault()}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setContextAction(null)
+          }}
+          onClick={() => {
+            onFixSelection?.(contextAction.selection)
+            setContextAction(null)
+          }}
+        >
+          <Icon name="pencil" size={13} /> Fix only this
+        </button>
+      )}
     </pre>
   )
 }

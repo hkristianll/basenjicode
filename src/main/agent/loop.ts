@@ -37,6 +37,7 @@ import { isToolError } from '../../shared/toolStatus'
 import { log } from '../logger'
 import { bgTasks } from '../bgtasks'
 import { recordTurn, type StopDetail } from './turnStats'
+import { countReadsOutsideRelevantFiles } from './relevantFiles'
 import { buildResumeMessages, isMidStreamDropError, MAX_STREAM_RESUMES, OverlapTrimmer } from './streamResume'
 import type { Emit } from './events'
 
@@ -248,6 +249,31 @@ const MEMORY_NUDGE =
   'commands, conventions, gotchas, where things live), call remember(fact) now — one concise fact per call. ' +
   'Skip this if nothing new is worth saving.'
 
+/**
+ * Compact once the conversation passes `frac` of the context cap.
+ *
+ * `promptTokens` is the model's own reported prompt size and is authoritative; `estimatedTokens` is the
+ * calibrated fallback used when there is no usage yet — which is every FIRST turn of a RESTORED session,
+ * since the loop's lastPromptTokens is per-instance and starts at 0.
+ *
+ * Both inputs are measured against the SAME ceiling, and that is the point of this function. The estimate
+ * path used to subtract the output reserve (`cap - maxTokens - 2000`) before applying `frac`, which made
+ * it far stricter than the real-usage path — at cap 134107 it fired at 54.6k where real usage fired at
+ * 73.8k, so reopening a session compacted it immediately while the meter still showed plenty of room.
+ * Raising `maxTokens` made the gap worse, which is backwards: a bigger output budget is not a reason to
+ * summarize sooner. The reserve belongs to TRIMMING (composeSendableMessages/trimHistory), not here.
+ */
+export function shouldCompactNow(opts: {
+  promptTokens: number
+  estimatedTokens: number
+  contextLimitTokens: number
+  frac: number
+}): boolean {
+  if (opts.contextLimitTokens <= 0) return false
+  const used = opts.promptTokens > 0 ? opts.promptTokens : opts.estimatedTokens
+  return used > opts.contextLimitTokens * opts.frac
+}
+
 export interface AgentConfig {
   model: string
   temperature: number
@@ -297,6 +323,8 @@ export interface AgentConfig {
   /** True for sessions with no human present (board/Hermes workers): a screened shell command is DENIED
    *  with guidance instead of raising an approval prompt nobody will answer. */
   headless?: boolean
+  /** Board seed's server-selected starting files; used only for the Scout-premise telemetry counter. */
+  relevantFiles?: string[]
 }
 
 /**
@@ -326,6 +354,8 @@ export class AgentSession {
   private currentAbort: AbortController | null = null
   private busy = false
   private reads = new ReadTracker()
+  /** Host persistence hook for set_working_folder; doubles as the capability gate (see constructor opts). */
+  private onWorkspaceChange?: (root: string) => void
   private snapshots = new SnapshotRecorder()
   // Total model completions issued in the current turn — bounds the multiplied retry/nudge/compaction
   // paths (each calls streamCompletion) so a flaky model can't burn unbounded calls/wall-clock per turn.
@@ -338,6 +368,10 @@ export class AgentSession {
   // token cap sums prompt+completion per attempt from it. Approximate lower bound: an attempt that dies
   // mid-stream never delivers its usage chunk.
   private completionTokensThisTurn = 0
+  // Wall-clock ms spent inside streamCompletion this turn (all retries/resumes/non-streaming fallbacks land
+  // within the timed wrapper). An instance field for the same reason as the two counters above. For turns.jsonl:
+  // completionTokensThisTurn / (genMsThisTurn/1000) is decode throughput with tool-execution time excluded.
+  private genMsThisTurn = 0
   // The stop chosen by done() for the current turn — read by the runTurn finally block (which has the
   // in-scope counters) to write one turns.jsonl record. Null until done() runs; reset each turn.
   private lastStop: { stopReason: StopReason; detail: StopDetail | string } | null = null
@@ -396,9 +430,13 @@ export class AgentSession {
     history: ChatMessage[]
     allowList?: AllowList
     tokenScale?: number
+    /** Host hook fired after set_working_folder re-roots the session (persist the new cwd). Its PRESENCE is
+     *  also the capability gate: sessions constructed without it (board workers, Brooke) cannot re-root. */
+    onWorkspaceChange?: (root: string) => void
   }) {
     this.id = opts.id
     this.workspace = new Workspace(opts.workspaceRoot)
+    this.onWorkspaceChange = opts.onWorkspaceChange
     this.client = opts.client
     this.registry = opts.registry
     this.config = opts.config
@@ -419,6 +457,17 @@ export class AgentSession {
 
   getHistory(): ChatMessage[] {
     return this.messages
+  }
+
+  /** Re-root the sandbox mid-conversation (the set_working_folder tool). Later tool calls, the shell
+   *  screener, and the next turn's system prompt all resolve against the new root; the renderer is told
+   *  via session-cwd and the host persists it through onWorkspaceChange. */
+  setWorkspaceRoot(absPath: string): string {
+    this.workspace = new Workspace(absPath)
+    this.safety.setWorkspaceRoot(this.workspace.root)
+    this.emit?.({ type: 'session-cwd', sessionId: this.id, cwd: this.workspace.root })
+    this.onWorkspaceChange?.(this.workspace.root)
+    return this.workspace.root
   }
 
   /** Is a turn currently running? (Used to route a new message to steering instead of a fresh turn.) */
@@ -545,6 +594,7 @@ export class AgentSession {
     this.completionsThisTurn = 0
     this.streamResumesThisTurn = 0
     this.completionTokensThisTurn = 0
+    this.genMsThisTurn = 0
     this.pendingSteer = [] // start clean — steers only apply within the turn that's now beginning
     this.emit = emit
     this.currentTurnId = turnId
@@ -573,6 +623,7 @@ export class AgentSession {
     let lastFinishReason = '' // last model finish_reason this turn
     let lastTurn = 0 // tool rounds reached
     let totalToolCalls = 0 // total tool calls executed this turn
+    const toolFailures: Record<string, number> = {} // failed calls by tool name this turn (for turns.jsonl)
 
     try {
       if (!this.config.model) {
@@ -1051,6 +1102,7 @@ export class AgentSession {
           // Match our own status prefixes exactly ("ERROR: " etc.) so a tool whose legitimate output
           // merely begins with the word ERROR (e.g. captured program logs) isn't flagged as a failure.
           const ok = !isToolError(toolResult)
+          if (!ok) toolFailures[call.name] = (toolFailures[call.name] ?? 0) + 1
           emit({ type: 'tool-result', turnId, callId: call.id, ok, result: toolResult, images: toolImages })
           const todoReminder = this.noteTodoRelevantTool(call.name, ok, call.arguments)
           if (todoReminder) this.messages.push({ role: 'system', content: todoReminder })
@@ -1206,7 +1258,19 @@ export class AgentSession {
           // Board per-ticket worker sessions are id'd `loop-<ticket>-<turnId>` (boardInner.ts); everything else
           // (chat, Brooke) is not a Mission worker turn. This is the discriminator the stop-reason histogram
           // filters on to isolate Mission struggle from interactive chat.
-          board: this.id.startsWith('loop-')
+          board: this.id.startsWith('loop-'),
+          completionTokens: this.completionTokensThisTurn,
+          genMs: this.genMsThisTurn,
+          ...(Object.keys(toolFailures).length ? { toolFailures } : {}),
+          ...(this.config.relevantFiles
+            ? {
+                readsOutsideRelevantFiles: countReadsOutsideRelevantFiles(
+                  this.workspace.root,
+                  this.reads.readPaths(),
+                  this.config.relevantFiles
+                )
+              }
+            : {})
         })
       }
       // Keep the persisted transcript well-formed no matter how the turn ended.
@@ -1282,15 +1346,12 @@ export class AgentSession {
   /** Should we summarize the conversation to reclaim context? True once it passes ~80% of the cap. */
   private shouldCompact(): boolean {
     if (lastUserIndex(this.messages) < 4) return false
-    // Compact at a fraction of the cap (Hermes parity: chat ~0.55, board 0.8). Prefer the model's real
-    // reported prompt size; fall back to the calibrated estimate when there's no usage yet.
-    const frac = this.config.compactAtFraction ?? 0.8
-    if (this.lastPromptTokens > 0) {
-      return this.lastPromptTokens > this.config.contextLimitTokens * frac
-    }
-    // No usage yet (e.g. a freshly loaded huge session): fall back to the calibrated estimate.
-    const budget = this.config.contextLimitTokens - (this.config.maxTokens ?? 4096) - 2000
-    return budget > 0 && estimateTokens(this.messages) * this.tokenScale > budget * frac
+    return shouldCompactNow({
+      promptTokens: this.lastPromptTokens,
+      estimatedTokens: estimateTokens(this.messages) * this.tokenScale,
+      contextLimitTokens: this.config.contextLimitTokens,
+      frac: this.config.compactAtFraction ?? 0.8
+    })
   }
 
   /** Replace the older transcript with an LLM-written summary, keeping the current turn intact. */
@@ -1525,7 +1586,28 @@ export class AgentSession {
   }
 
   /** Stream one completion, assembling text and tool-call deltas. */
+  /** Timed shell over the real completion path: every model call (streaming, resumes, the non-streaming
+   *  fallback) accrues into genMsThisTurn so turns.jsonl can separate decode time from tool time. */
   private async streamCompletion(
+    messages: ChatMessage[],
+    tools: ChatTool[] | undefined,
+    signal: AbortSignal
+  ): Promise<{
+    text: string
+    toolCalls: ToolCall[]
+    finishReason: string
+    usage?: { prompt_tokens: number; completion_tokens?: number }
+    reasoning: string
+  }> {
+    const startedAt = Date.now()
+    try {
+      return await this.streamCompletionInner(messages, tools, signal)
+    } finally {
+      this.genMsThisTurn += Date.now() - startedAt
+    }
+  }
+
+  private async streamCompletionInner(
     messages: ChatMessage[],
     tools: ChatTool[] | undefined,
     signal: AbortSignal
@@ -1987,7 +2069,9 @@ export class AgentSession {
       todos: this.todoController,
       images: this.config.images,
       attachImages: onImages,
-      hermesProject: this.config.hermesProject
+      hermesProject: this.config.hermesProject,
+      // Capability-gated on the host hook: without a persistence path a re-root would silently revert on reload.
+      setWorkspaceRoot: this.onWorkspaceChange ? (p) => this.setWorkspaceRoot(p) : undefined
     }
     const timeoutMs = def.timeoutMs ?? 30_000
     let timedOut = false

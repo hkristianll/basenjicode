@@ -13,11 +13,13 @@ export interface SnapshotInfo {
 export function GitPanel({
   sessionId,
   snapshot,
-  onUndo
+  onUndo,
+  onFixSelection
 }: {
   sessionId: string | null
   snapshot?: SnapshotInfo
   onUndo?: (turnId: string) => void
+  onFixSelection?: (path: string, selection: string) => void
 }) {
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [sel, setSel] = useState<string | null>(null)
@@ -93,7 +95,7 @@ export function GitPanel({
           <span className="plan-name">{sel}</span>
         </div>
         <div className="plan-content">
-          <DiffView unified={diff} />
+          <DiffView unified={diff} onFixSelection={onFixSelection ? (selection) => onFixSelection(sel, selection) : undefined} />
         </div>
       </div>
     )

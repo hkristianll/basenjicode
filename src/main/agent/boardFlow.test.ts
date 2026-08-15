@@ -17,12 +17,19 @@ import type { TicketTurnResult } from './boardSeed'
 const ticket: BoardTicket = { id: 1, title: 'T1', body: 'do it', status: 'in_progress', project: 'p' }
 
 describe('scopeTscCheck — scope a whole-project tsc to the ticket files (anti scope-bleed)', () => {
-  it('rewrites a bare `tsc --noEmit` to a per-ticket tsconfig over only the declared files', () => {
-    const out = scopeTscCheck('npx tsc --noEmit', ['src/entities/Paddle.ts', 'src/entities/Paddle.test.ts'])
+  it('rewrites a bare `tsc --noEmit` with PowerShell syntax on Windows', () => {
+    const out = scopeTscCheck('npx tsc --noEmit', ['src/entities/Paddle.ts', 'src/entities/Paddle.test.ts'], 'powershell')
     expect(out).toContain('Set-Content tsconfig.ticket.json')
     expect(out).toContain('tsc --noEmit -p tsconfig.ticket.json')
     expect(out).toContain('"include":["src/entities/Paddle.ts","src/entities/Paddle.test.ts"]')
     expect(out).toContain('"extends":"./tsconfig.json"')
+  })
+  it('rewrites the same check with POSIX syntax on macOS/Linux', () => {
+    const out = scopeTscCheck('npx tsc --noEmit', ['src/entities/Paddle.ts', 'src/entities/Paddle.test.ts'], 'posix')
+    expect(out).toContain("printf '%s\\n'")
+    expect(out).toContain('> tsconfig.ticket.json && npx tsc --noEmit -p tsconfig.ticket.json')
+    expect(out).toContain('"include":["src/entities/Paddle.ts","src/entities/Paddle.test.ts"]')
+    expect(out).not.toContain('Set-Content')
   })
   it('leaves it unchanged when the ticket declares no files (can\'t scope)', () => {
     expect(scopeTscCheck('npx tsc --noEmit', [])).toBe('npx tsc --noEmit')
@@ -37,7 +44,10 @@ describe('scopeTscCheck — scope a whole-project tsc to the ticket files (anti 
     expect(scopeTscCheck('(Test-Path src/a.ts)', ['src/a.ts'])).toBe('(Test-Path src/a.ts)')
   })
   it('normalizes backslashes in declared paths', () => {
-    expect(scopeTscCheck('tsc --noEmit', ['src\\ui\\ScoreUI.ts'])).toContain('"src/ui/ScoreUI.ts"')
+    expect(scopeTscCheck('tsc --noEmit', ['src\\ui\\ScoreUI.ts'], 'posix')).toContain('"src/ui/ScoreUI.ts"')
+  })
+  it('quotes apostrophes in declared paths as inert POSIX data', () => {
+    expect(scopeTscCheck('tsc --noEmit', ["src/user's-view.ts"], 'posix')).toContain("user'\\''s-view.ts")
   })
 })
 
@@ -447,7 +457,7 @@ describe('runTicketFlow — review→revise loop', () => {
       runReview: async () => ({ approved: false, feedback: '' })
     }
     const events: LoopEvent[] = []
-    const out = await runTicketFlow({ ...ticket, check: 'Get-ChildItem missing.py' }, cfg({ maxAttemptsPerTicket: 2 }), deps(events), failingCheckSeam)
+    const out = await runTicketFlow({ ...ticket, check: 'node missing.js' }, cfg({ maxAttemptsPerTicket: 2 }), deps(events), failingCheckSeam)
     expect(out.terminal).toBe('park')
     expect(turns).toBe(2)
     expect(retryFeedback).toContain('Get-ChildItem: cannot find path')
