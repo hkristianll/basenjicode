@@ -1,0 +1,76 @@
+# Build a downloadable macOS app — free end to end: public-repo Actions minutes,
+# AD-HOC codesign (no Apple Developer ID), release asset downloadable without login.
+name: Build macOS app
+
+# Build on demand from the Actions tab, or automatically on a version tag.
+on:
+  workflow_dispatch: {}
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # gh release create/upload
+
+jobs:
+  build-mac:
+    # macos-14 is an Apple Silicon runner -> native arm64 build, no cross-arch needed.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build bundle
+        run: npm run build
+
+      - name: Build app bundle (unpacked, arm64)
+        # 'dir' target produces BasenjiCode.app WITHOUT zipping, so we can ad-hoc
+        # sign it ourselves and zip it the macOS-correct way in the next step.
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --mac dir --arm64 --publish never
+
+      - name: Ad-hoc sign + zip
+        # Apple Silicon refuses to launch an unsigned app (Finder calls it
+        # "damaged"). With no paid Apple Developer ID we apply an AD-HOC
+        # signature, which is enough for it to run. (The recipient still clears
+        # the one-time download-quarantine flag via "Open Anyway" or xattr.)
+        # 'ditto' zips the Apple-correct way, preserving the signature and the
+        # bundle's internal symlinks -- a plain zip can break those and
+        # re-trigger "damaged".
+        run: |
+          set -e
+          APP=$(find dist -maxdepth 3 -name "BasenjiCode.app" -type d | head -1)
+          echo "Signing: $APP"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          ditto -c -k --keepParent "$APP" "dist/BasenjiCode-arm64-mac.zip"
+          ls -lh dist/*.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BasenjiCode-mac-arm64
+          path: dist/BasenjiCode-arm64-mac.zip
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        # Release assets are downloadable WITHOUT a GitHub account (Actions
+        # artifacts are not). Creates the release for the current package.json
+        # version if it doesn't exist yet, then uploads/replaces the zip.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
+            --title "BasenjiCode $VERSION" \
+            --notes "macOS Apple Silicon build (ad-hoc signed). Download the zip, unzip, drag BasenjiCode to Applications. First launch: System Settings -> Privacy & Security -> Open Anyway."
+          gh release upload "$TAG" dist/BasenjiCode-arm64-mac.zip --clobber
