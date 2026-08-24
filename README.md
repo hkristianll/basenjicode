@@ -1,5 +1,3 @@
-
-
 # BasenjiCode
 
 A quiet basenji of a coding agent: it doesn't bark, and it gets things done.
@@ -10,57 +8,17 @@ A quiet basenji of a coding agent: it doesn't bark, and it gets things done.
 
 ## Why BasenjiCode
 
-BasenjiCode is a local-first, open-source (MIT) Electron desktop app that lets you chat with a model while it reads, writes, and edits code in a project folder, runs shell commands and background dev servers, previews the result live, and verifies its own work. It is built specifically to make small local models reliable coding agents. Windows is the reference platform; macOS/Linux support is built in and being hardened through CI.
+BasenjiCode is a desktop app for coding with a local LLM. You chat; the model reads and edits the files in your project folder, runs shell commands, previews the result live, and verifies its own work. Open source (MIT), built on Electron.
 
-Developed and battle-tested against **Qwen 3.8 27B on LM Studio**: the harness took the same model from a circuit-breaker death at turn 57 to a clean self-verified 128-turn run building a playable browser game — same GPU, same prompt, better harness. Every harness change is validated on real coding tasks with Qwen 3.8 27B as the reference model; Qwen 3.6, Qwen coder variants, and any other LM Studio / Ollama / OpenAI-compatible model work the same way.
+Most coding agents assume a big cloud model. BasenjiCode is built for small local ones: the harness parses tool calls from plain text, repairs bad arguments, and stops repeated failures, so a 27B model on a single GPU can finish real tasks. The reference model is **Qwen 3.8 27B on LM Studio**. Under a plain harness it died at turn 57; under this one, the same model on the same GPU completed a 128-turn run that built a playable browser game.
 
-## Features
+Windows is the reference platform. macOS and Linux are supported and being hardened through CI.
 
-### Harness for small local models
+## Install
 
-- Text-format tool-call recovery: XML/JSON forms are parsed from plain output, with no reliance on native function calling.
-- Automatic repair of mistyped tool arguments.
-- Validation errors that show the model the exact correct call shape.
-- Deterministic-failure circuit breakers: a model repeating the same broken call gets corrected once, then stopped.
-- KV-cache-friendly prompting: byte-stable prefix for fast turns at large context on llama.cpp-based servers.
-- Live “Thinking…” progress indicator for reasoning models.
-- Per-turn transcript persistence for crash-safe sessions.
-- Compaction that preserves project state, live dev-server handles, and the todo list.
+**macOS (Apple Silicon):** download [BasenjiCode-arm64-mac.zip](https://github.com/hkristianll/basenjicode/releases/latest/download/BasenjiCode-arm64-mac.zip), unzip, and drag BasenjiCode to Applications. macOS blocks unidentified apps once on first launch — allow it under System Settings → Privacy & Security → "Open Anyway".
 
-### Agent capabilities
-
-- Chat mode with tool use: read/write/edit/multi-edit files, grep/glob, shell, background tasks.
-- Live in-app preview pane with screenshot feedback to the model.
-- Task/todo tracking panel.
-- Approval gates for risky actions with undoable edits and per-turn snapshots + rewind.
-- Embedded ticket board: kanban with REST + MCP faces, web UI at `localhost:8930`, for planning dependency-linked work.
-- Loop mode: autonomously drains the ticket board one ticket at a time with per-ticket verification.
-- Hermes orchestrator: give it a big goal; it decomposes, executes, and replans.
-- Multi-model role assignment: planner/coder/reviewer can be different models.
-
-## Benchmarking
-
-BasenjiCode ships with a task-based benchmark harness (`bench/`) that scores agent runs on real coding tasks from telemetry + a local judge model. It is used to validate every harness change.
-
-## Backends
-
-| Backend | Category | Notes |
-|---|---:|---|
-| LM Studio | Local, primary | `localhost:1234`; fully offline operation with a local backend |
-| Ollama | Local | Fully offline operation with a local backend |
-| Any OpenAI-compatible endpoint | Compatible | Use an existing OpenAI-compatible server or endpoint |
-| OpenAI | Cloud | Bring your own API key |
-| Anthropic | Cloud | Bring your own API key |
-| Gemini | Cloud | Bring your own API key |
-
-## Requirements
-
-- Windows 10/11 (reference platform), macOS, or Linux (macOS/Linux hardening in progress)
-- Node 22+ and npm
-- A local model server (LM Studio or Ollama) OR a cloud API key
-- Recommended local model: **Qwen 3.8 27B** (the reference model the harness is benchmarked against); any recent 27B-class instruct/thinking model runs well on a single 24 GB GPU
-
-## Quickstart
+**Windows and Linux:** no packaged download yet — run from source (needs Node 22+):
 
 ```bash
 git clone https://github.com/hkristianll/basenjicode.git
@@ -69,35 +27,67 @@ npm install
 npm run dev
 ```
 
-For an installable build:
+For an installable build: `npm run package:win`, `npm run package:mac`, or `npm run package:linux`.
 
-```bash
-npm run build
-# then use electron-builder
-```
+**First run:** open Settings → Connections, add a connection (LM Studio's default is `localhost:1234`), pick a model, open a project folder, and ask for something.
 
-In Settings, add a connection (LM Studio default `localhost:1234`), pick a model, open a project folder, and ask for something.
+## Features
+
+### Harness for small local models
+
+- Tool calls parsed from plain text (XML or JSON) — no native function calling needed.
+- Automatic repair of mistyped tool arguments.
+- Validation errors show the model the exact correct call shape.
+- Circuit breakers: a model repeating the same broken call is corrected once, then stopped.
+- Per-model capability profiles and thinking budgets for reasoning models.
+- KV-cache-friendly prompting: byte-stable prefix for fast turns at large context on llama.cpp-based servers.
+- Live "Thinking…" progress indicator while a reasoning model works.
+- Crash-safe sessions: the transcript is saved after every turn.
+- Context compaction that keeps project state, running dev servers, and the todo list.
+
+### Agent capabilities
+
+- Read, write, edit, and multi-edit files; grep/glob search; shell commands; background tasks.
+- Live in-app preview pane with screenshot feedback to the model.
+- Task/todo tracking panel.
+- Approval gates for risky actions; undoable edits with per-turn snapshots and rewind.
+- Embedded ticket board (kanban, REST + MCP, web UI at `localhost:8930`) for planning dependency-linked work.
+- Loop mode: drains the ticket board one ticket at a time, verifying each.
+- Hermes orchestrator: give it a big goal; it decomposes, executes, and replans.
+- Multi-model roles: planner, coder, and reviewer can be different models.
+
+## Backends
+
+| Backend | Type | Notes |
+|---|---|---|
+| LM Studio | Local | Default, `localhost:1234`. Fully offline. |
+| Ollama | Local | Fully offline. |
+| Any OpenAI-compatible server | Local or remote | Point it at the endpoint. |
+| OpenAI / Anthropic / Gemini | Cloud | Bring your own API key. |
+
+Recommended local model: **Qwen 3.8 27B**, the reference model every harness change is benchmarked against. Any recent 27B-class instruct or thinking model runs well on a single 24 GB GPU.
+
+## Benchmarking
+
+`bench/` holds a task-based benchmark harness that scores agent runs on real coding tasks, using run telemetry plus a local judge model. Every harness change is validated against it.
 
 ## Safety
 
-- Approval gates for risky actions, including shell command use.
-- Edits are undoable; each turn has a snapshot you can rewind to.
-- The embedded ticket board is loopback-only at `localhost:8930`.
+- Approval gates for risky actions, including shell commands.
+- Edits are undoable; every turn has a snapshot you can rewind to.
+- The embedded ticket board is loopback-only (`localhost:8930`).
 
 ## Optional integrations
 
-Optional integrations are off by default and need local setup:
-
-- ComfyUI image generation
-- Voice mode with local STT/TTS
+Off by default, each needs local setup: ComfyUI image generation, and voice mode with local STT/TTS.
 
 ## Roadmap
 
-Cross-platform support, thinking budgets, and model capability profiles. macOS/Linux support is in active development.
+macOS and Linux hardening — Windows is the reference platform today.
 
 ## Contributing
 
-PRs welcome.
+PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
