@@ -55,7 +55,7 @@ BasenjiCode ships with a task-based benchmark harness (`bench/`) that scores age
 
 ## Requirements
 
-- Windows 10/11 (for now)
+- Windows 10/11 (reference platform), macOS, or Linux (macOS/Linux hardening in progress)
 - Node 22+ and npm
 - A local model server (LM Studio or Ollama) OR a cloud API key
 - Recommended local model: **Qwen 3.8 27B** (the reference model the harness is benchmarked against); any recent 27B-class instruct/thinking model runs well on a single 24 GB GPU
@@ -63,7 +63,8 @@ BasenjiCode ships with a task-based benchmark harness (`bench/`) that scores age
 ## Quickstart
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/hkristianll/basenjicode.git
+cd basenjicode
 npm install
 npm run dev
 ```
