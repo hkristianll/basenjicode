@@ -78,6 +78,7 @@ export interface LLMConnection {
 export class OpenAICompatClient implements LLMConnection {
   private client: OpenAI
   private baseURL: string
+  private textOnlyModels = new Set<string>()
 
   constructor(opts: { baseURL: string; apiKey?: string; timeoutMs?: number }) {
     this.baseURL = opts.baseURL
@@ -129,21 +130,52 @@ export class OpenAICompatClient implements LLMConnection {
   /** Model-eviction/model-swap recovery shared by the streaming and non-streaming paths: reload-and-retry
    *  once (idle TTL / VRAM grab), then follow an unambiguous model swap once. Anything else propagates. */
   private async withModelRecovery<T>(p: ChatStreamParams, run: (pp: ChatStreamParams) => Promise<T>): Promise<T> {
+    const request = (pp: ChatStreamParams) => this.withImageRecovery(pp, run)
     try {
-      return await run(p)
+      return await request(p)
     } catch (e) {
       if (!isModelUnloadedError(e) || p.signal.aborted) throw e
       await ensureModelLoaded(this.baseURL, p.model, p.reloadCtx ?? DEFAULT_RELOAD_CTX)
       if (p.signal.aborted) throw e
       try {
-        return await run(p) // retry once after the reload — covers eviction (idle TTL, VRAM grab)
+        return await request(p) // retry once after the reload — covers eviction (idle TTL, VRAM grab)
       } catch (e2) {
         if (!isModelUnloadedError(e2) || p.signal.aborted) throw e2
         const alt = await this.soleLoadedAlternative(p.model)
         if (!alt) throw e2
         p.onNotice?.(`Model '${p.model}' is no longer available in LM Studio — continuing with the loaded model '${alt}'.`)
-        return await run({ ...p, model: alt })
+        return await request({ ...p, model: alt })
       }
+    }
+  }
+
+  /** Some text-only backends reject screenshots automatically added by tools. Retry only an explicit
+   *  unsupported-image rejection, preserving the original transcript and all text/tool results. */
+  private async withImageRecovery<T>(p: ChatStreamParams, run: (pp: ChatStreamParams) => Promise<T>): Promise<T> {
+    const hasImages = p.messages.some(m => m.role === 'user' && m.images?.length)
+    if (!hasImages) return run(p)
+    const textOnly = (): ChatStreamParams => ({
+      ...p,
+      messages: p.messages.map(m => {
+        if (m.role !== 'user' || !m.images?.length) return m
+        const { images, ...text } = m
+        return {
+          ...text,
+          content: `${m.content ?? ''}\n[${images.length} image(s) omitted: this model does not support image inputs. You cannot inspect these images; do not claim visual findings. Ask for a text description or a vision-capable model when needed.]`
+        }
+      })
+    })
+    if (this.textOnlyModels.has(p.model)) return run(textOnly())
+    try {
+      return await run(p)
+    } catch (e) {
+      const error = e as { status?: number; message?: string; error?: { message?: string } } | null
+      const message = `${error?.message ?? ''} ${error?.error?.message ?? ''}`
+      if (p.signal.aborted || error?.status !== 400 ||
+          !/does not support image inputs|images? (?:inputs? )?(?:are |is )?not supported|does not support (?:images|vision)/i.test(message)) throw e
+      this.textOnlyModels.add(p.model)
+      p.onNotice?.(`Model '${p.model}' cannot read images. Continuing with text only; images remain in the chat. Use a vision-capable model for visual inspection.`)
+      return run(textOnly())
     }
   }
 
@@ -193,7 +225,7 @@ export function createConnectionClient(conn: Pick<Connection, 'baseURL' | 'apiKe
 export function toOpenAIMessages(
   messages: ChatMessage[]
 ): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
-  return messages.map((m) => {
+  return messages.map((m, index) => {
     switch (m.role) {
       case 'assistant': {
         const out: OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam = {
@@ -216,7 +248,14 @@ export function toOpenAIMessages(
           content: m.content ?? ''
         }
       case 'system':
-        return { role: 'system', content: m.content ?? '' }
+        // Several model-supplied Jinja templates (including the strict Qwen template) reject a request
+        // when ANY system message appears after index 0. BasenjiCode intentionally carries live project
+        // state and recovery nudges at their chronological positions, so keep the first message as the
+        // cache-stable system prompt and encode every later control message as an explicit user reminder.
+        // Moving all reminders into the first prompt would both lose their timing and invalidate the KV
+        // prefix cache on every tool round.
+        if (index === 0) return { role: 'system', content: m.content ?? '' }
+        return { role: 'user', content: `[System reminder]\n${m.content ?? ''}` }
       default: {
         // A user message with images becomes multimodal content (text part + image_url parts),
         // which LM Studio forwards to a vision model. Text-only messages stay plain strings.

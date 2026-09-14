@@ -36,6 +36,93 @@ describe('toOpenAIMessages — multimodal (vision)', () => {
   })
 })
 
+describe('toOpenAIMessages — strict chat-template compatibility', () => {
+  it('keeps only the leading system prompt as system and preserves later reminders in sequence', () => {
+    const out = toOpenAIMessages([
+      { role: 'system', content: 'stable prompt' },
+      { role: 'user', content: 'do the task' },
+      { role: 'assistant', content: 'working' },
+      { role: 'system', content: 'current project state' }
+    ] as ChatMessage[])
+
+    expect(out).toEqual([
+      { role: 'system', content: 'stable prompt' },
+      { role: 'user', content: 'do the task' },
+      { role: 'assistant', content: 'working' },
+      { role: 'user', content: '[System reminder]\ncurrent project state' }
+    ])
+    expect(out.filter((message) => message.role === 'system')).toHaveLength(1)
+  })
+
+  it('never emits a late system role when a payload has no leading system prompt', () => {
+    const out = toOpenAIMessages([
+      { role: 'user', content: 'continue' },
+      { role: 'system', content: 'resume exactly where you stopped' }
+    ] as ChatMessage[])
+
+    expect(out).toEqual([
+      { role: 'user', content: 'continue' },
+      { role: 'user', content: '[System reminder]\nresume exactly where you stopped' }
+    ])
+    expect(out.some((message) => message.role === 'system')).toBe(false)
+  })
+})
+
+describe('text-only model image recovery', () => {
+  beforeEach(() => { create.mockReset(); ensureModelLoadedMock.mockReset() })
+  const unsupported = () => Object.assign(new Error('The provided messages contain images, but this model does not support image inputs.'), { status: 400 })
+  const params = (): ChatStreamParams => ({
+    model: 'text-model',
+    messages: [
+      { role: 'system', content: 'Stable prompt' },
+      { role: 'user', content: 'Inspect the page', images: ['data:image/png;base64,AAAA'] },
+      { role: 'assistant', content: 'Checking' },
+      { role: 'user', content: 'Tool screenshot', images: ['data:image/png;base64,BBBB'] }
+    ],
+    temperature: 0, maxTokens: 32, signal: new AbortController().signal, onNotice: vi.fn()
+  })
+
+  it.each(['chatStream', 'chatComplete'] as const)('%s retries explicit image rejection without losing text or mutating history', async method => {
+    const p = params()
+    const original = structuredClone(p.messages)
+    const result = { choices: [] }
+    create.mockRejectedValueOnce(unsupported()).mockResolvedValueOnce(result)
+    const client = new OpenAICompatClient({ baseURL: 'http://localhost:1234/v1' })
+    expect(await client[method](p)).toBe(result)
+    const requests = create.mock.calls.map(call => call[0])
+    expect(requests).toHaveLength(2)
+    expect(Array.isArray(requests[0].messages[1].content)).toBe(true)
+    expect(requests[1].messages.every((m: { content: unknown }) => typeof m.content === 'string')).toBe(true)
+    expect(requests[1].messages[1].content).toContain('Inspect the page')
+    expect(requests[1].messages[3].content).toContain('You cannot inspect these images')
+    expect(requests[1].messages[0]).toEqual({ role: 'system', content: 'Stable prompt' })
+    expect(p.messages).toEqual(original)
+    expect(p.onNotice).toHaveBeenCalledOnce()
+    expect(ensureModelLoadedMock).not.toHaveBeenCalled()
+  })
+
+  it('remembers the rejection for that model but still sends images to a different model', async () => {
+    const client = new OpenAICompatClient({ baseURL: 'http://localhost:1234/v1' })
+    create.mockRejectedValueOnce(unsupported()).mockResolvedValue({ choices: [] })
+    await client.chatComplete(params())
+    await client.chatComplete(params())
+    expect(typeof create.mock.calls[2][0].messages[1].content).toBe('string')
+    await client.chatComplete({ ...params(), model: 'vision-model' })
+    expect(Array.isArray(create.mock.calls[3][0].messages[1].content)).toBe(true)
+  })
+
+  it('does not strip images on unrelated errors or retry failed text requests', async () => {
+    const client = new OpenAICompatClient({ baseURL: 'http://localhost:1234/v1' })
+    const badRequest = Object.assign(new Error('Invalid model parameter'), { status: 400 })
+    create.mockRejectedValue(badRequest)
+    await expect(client.chatComplete(params())).rejects.toThrow('Invalid model parameter')
+    expect(create).toHaveBeenCalledOnce()
+    create.mockReset().mockRejectedValueOnce(unsupported()).mockRejectedValueOnce(badRequest)
+    await expect(client.chatComplete(params())).rejects.toThrow('Invalid model parameter')
+    expect(create).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('isModelUnloadedError', () => {
   it('matches LM Studio eviction messages (Error and nested {error:{message}})', () => {
     expect(isModelUnloadedError(new Error('Model is unloaded'))).toBe(true)
