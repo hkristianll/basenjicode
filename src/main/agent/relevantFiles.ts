@@ -82,3 +82,18 @@ export function pickRelevantFiles(cwd: string, ticket: { title: string; body?: s
   walk(cwd, 0)
   return scored.sort((a, b) => b.score - a.score).slice(0, max).map((s) => s.path)
 }
+
+/** Unique read_file targets outside the scorer's seed list — the one metric that gates a richer Scout index. */
+export function countReadsOutsideRelevantFiles(cwd: string, absoluteReads: Iterable<string>, relevantFiles: Iterable<string>): number {
+  const normalize = (value: string): string => {
+    const path = value.replace(/\\/g, '/').replace(/^\.\//, '')
+    return process.platform === 'win32' ? path.toLowerCase() : path
+  }
+  const relevant = new Set([...relevantFiles].map(normalize))
+  const outside = new Set<string>()
+  for (const absolute of absoluteReads) {
+    const rel = normalize(relative(cwd, absolute))
+    if (!rel.startsWith('../') && !relevant.has(rel)) outside.add(rel)
+  }
+  return outside.size
+}

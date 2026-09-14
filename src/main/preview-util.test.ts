@@ -1,5 +1,46 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeLevel, parseConsoleMessage, filterByLevel, type ConsoleLine } from './preview-util'
+import {
+  normalizeLevel,
+  parseConsoleMessage,
+  filterByLevel,
+  formatNetworkDiagnostic,
+  normalizeViewport,
+  VIEWPORT_MIN,
+  VIEWPORT_MAX,
+  type ConsoleLine
+} from './preview-util'
+
+describe('normalizeViewport', () => {
+  it('returns null when no size is asked for, so the panel is captured as-is', () => {
+    expect(normalizeViewport({})).toBeNull()
+    expect(normalizeViewport({ width: undefined, height: undefined })).toBeNull()
+  })
+
+  it('passes both dimensions through', () => {
+    expect(normalizeViewport({ width: 1920, height: 1080 })).toEqual({ width: 1920, height: 1080 })
+  })
+
+  it('completes a single dimension to 16:9 instead of rejecting it', () => {
+    expect(normalizeViewport({ width: 1920 })).toEqual({ width: 1920, height: 1080 })
+    expect(normalizeViewport({ height: 1080 })).toEqual({ width: 1920, height: 1080 })
+  })
+
+  it('clamps to the usable range', () => {
+    expect(normalizeViewport({ width: 10, height: 10 })).toEqual({ width: VIEWPORT_MIN, height: VIEWPORT_MIN })
+    expect(normalizeViewport({ width: 99_999, height: 99_999 })).toEqual({ width: VIEWPORT_MAX, height: VIEWPORT_MAX })
+  })
+
+  it('ignores junk values rather than emulating a zero-size viewport', () => {
+    expect(normalizeViewport({ width: 0, height: 0 })).toBeNull()
+    expect(normalizeViewport({ width: -800 })).toBeNull()
+    expect(normalizeViewport({ width: Number.NaN })).toBeNull()
+    expect(normalizeViewport({ width: '1920' as unknown as number })).toBeNull()
+  })
+
+  it('rounds fractional sizes', () => {
+    expect(normalizeViewport({ width: 1280.6, height: 720.4 })).toEqual({ width: 1281, height: 720 })
+  })
+})
 
 describe('normalizeLevel', () => {
   it('maps Electron ≥36 string levels', () => {
@@ -67,5 +108,27 @@ describe('filterByLevel', () => {
 
   it('treats info and log as the same rank', () => {
     expect(filterByLevel(lines, 'info').map((l) => l.message)).toEqual(['l', 'i', 'w', 'e'])
+  })
+})
+
+describe('formatNetworkDiagnostic', () => {
+  it('reports failed requests without leaking query values', () => {
+    expect(
+      formatNetworkDiagnostic({
+        method: 'GET',
+        resourceType: 'xhr',
+        url: 'http://localhost:5173/api/items?token=secret',
+        statusCode: 500
+      })
+    ).toBe('[network] GET xhr http://localhost:5173/api/items?… returned HTTP 500')
+  })
+
+  it('reports transport failures and ignores ordinary completions/navigation aborts', () => {
+    expect(
+      formatNetworkDiagnostic({ method: 'POST', resourceType: 'fetch', url: 'http://localhost/api', error: 'net::ERR_CONNECTION_REFUSED' })
+    ).toContain('failed (net::ERR_CONNECTION_REFUSED)')
+    expect(formatNetworkDiagnostic({ resourceType: 'script', url: 'http://localhost/app.js', statusCode: 200 })).toBeNull()
+    expect(formatNetworkDiagnostic({ resourceType: 'script', url: 'http://localhost/app.js', error: 'net::ERR_ABORTED' })).toBeNull()
+    expect(formatNetworkDiagnostic({ resourceType: 'mainFrame', url: 'http://localhost/', statusCode: 500 })).toBeNull()
   })
 })

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ticketTerms, scoreFile, pickRelevantFiles } from './relevantFiles'
+import { ticketTerms, scoreFile, pickRelevantFiles, countReadsOutsideRelevantFiles } from './relevantFiles'
 
 describe('ticketTerms', () => {
   it('keeps significant terms + explicit filenames, drops stopwords', () => {
@@ -45,5 +45,18 @@ describe('pickRelevantFiles', () => {
     expect(files).toContain('src/game/city.js') // content "lane"/"intersection"
     expect(files).toContain('src/game/vehicle.js') // content "car"
     expect(files).not.toContain('src/game/buildings.js') // no term match — the file the worker wasted time on
+  })
+})
+
+describe('countReadsOutsideRelevantFiles', () => {
+  it('counts unique in-workspace read_file targets outside the seed list', () => {
+    const cwd = join(tmpdir(), 'project')
+    expect(
+      countReadsOutsideRelevantFiles(
+        cwd,
+        [join(cwd, 'src', 'relevant.ts'), join(cwd, 'src', 'extra.ts'), join(cwd, 'src', 'extra.ts'), join(tmpdir(), 'elsewhere.ts')],
+        ['src/relevant.ts']
+      )
+    ).toBe(1)
   })
 })

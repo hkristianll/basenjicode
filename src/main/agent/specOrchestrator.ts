@@ -15,10 +15,15 @@ import { parsePlan, orderForCreate, parseReplan, allSettled, normalizeRole, depa
 import { readTeamMemory, writeTeamMemory, extractMemoryBlock } from './teamMemory'
 import { detectContestedConcepts, createParkTracker, type Concept } from './thrashGuard'
 import { applyGroomSplits, parseGroomSplits } from './groom'
-import { validateCheck, rewriteCheck } from './checkLint'
+import { checkPromptRules, rewriteCheck, shellCheckLabel, validateCheck } from './checkLint'
 import { findUnwiredModules, type SourceFile } from './unwiredModules'
 import type { LoopConfig, LoopEvent, BoardTicketRow } from '../../shared/ipc-types'
 import type { Settings, ChatMessage, Connection } from '../../shared/domain-types'
+
+// One source of truth for every model-authored autonomous check. These resolve to the same host dialect used by
+// runShell; keeping the fragments here prevents one planner phase quietly reverting to Windows-only instructions.
+const CHECK_PROMPT_RULES = checkPromptRules()
+const CHECK_SHELL_LABEL = shellCheckLabel()
 
 /** PHASE 1 — the OUTLINE contract. The plan is generated in two pieces so a weak local model never has to emit the
  *  whole thing at once: here it produces ONLY the spec + a compact ticket SKELETON (title/role/deps, no bodies, no
@@ -92,17 +97,15 @@ const DETAIL_SYSTEM = [
   '  "returns null when the target is unreachable", "never routes through water"). BANNED: vague criteria like "works',
   '  correctly", "handles edge cases", "is well tested". Stay in THIS ticket\'s slice; when a boundary is fuzzy, state',
   '  what is OUT of scope (owned by another ticket).',
-  '- "check": a command that passes (exit 0) ONLY when the ticket genuinely WORKS. It RUNS IN POWERSHELL ON WINDOWS —',
-  '  never bash (`test -f`, `grep`, `/dev/null`, `&&`, `||`). For an IMPLEMENTATION ticket the check MUST FAIL on a stub.',
+  `- "check": ${CHECK_PROMPT_RULES} For an IMPLEMENTATION ticket the check MUST FAIL on a stub.`,
   '  DEFAULT to `npx tsc --noEmit` — it typechecks (catches missing/mis-typed logic) WITHOUT running the code. This',
   '  matters: BROWSER / GAME-ENGINE code (Phaser, canvas, WebGL, DOM) CANNOT be imported in a node test runner — e.g.',
   '  Phaser pulls in `phaser3spectorjs` / WebGL at module load and crashes vitest before any test runs, so a',
   '  `npx vitest run X.spec.ts` check on an entity is UNWINNABLE. Use a focused runtime test (`npx vitest run …`) ONLY',
   '  when the file is genuinely NODE-RUNNABLE: pure logic / utilities with NO browser-engine import. RUNTIME behavior',
   '  of engine code is verified on the INTEGRATION ticket (the headless smoke test that boots the assembled app where',
-  '  a real canvas exists) — never per-entity in node. NEVER a pure existence check (`Test-Path`) for impl — it passes',
-  '  on an empty stub. Use `Test-Path`/`Select-String` ONLY for scaffold/config/docs. A REVIEW ticket gets check ""',
-  '  (empty). To combine conditions wrap each in parentheses: `(Test-Path a) -and (Test-Path b)`.',
+  '  a real canvas exists) — never per-entity in node. NEVER a pure existence check for implementation — it passes',
+  '  on an empty stub. Use existence/content checks ONLY for scaffold/config/docs. A REVIEW ticket gets check "" (empty).',
   '- Match the role: IMPLEMENTATION builds the code AND adds a focused test it gates on (self-verify, never stub to go',
   '  green); DESIGN builds the real look to the spec\'s visual bar (REAL art, not colored-rectangle placeholders) and',
   '  views the result; TESTING writes the named-case tests; REVIEW audits + routes fixes (no check); DOCS writes docs.',
@@ -195,7 +198,7 @@ function complete(config: LoopConfig, deps: OrchestratorDeps, messages: ChatMess
 const PLANNER_CTX_CAP = 80_000
 
 /** Append Brooke's accumulated cross-project CRAFT (managerMemory) to a planning system prompt, so the PLAN itself
- *  benefits from what she has learned (e.g. "a scaffold check must not bundle Test-Path + npm install", "give each
+ *  benefits from what she has learned (e.g. "a scaffold check must not bundle an existence test + npm install", "give each
  *  entity its own file") — not only her after-the-fact interventions. This is the half of the learning loop that makes
  *  the DECOMPOSE better each run; empty memory leaves the prompt unchanged. */
 export function craftSystem(base: string): string {
@@ -277,11 +280,12 @@ const DIFF_ATTEMPTS = 3
  *  cap — so it only trips egregious cases. On trip, decompose reject-and-repairs ("split it"). */
 const OVERSCOPE_BODY_CHARS = 5_000
 
-// A check that only proves files EXIST (Test-Path / Select-String, no runner) is satisfied by an empty stub, so a
-// ticket's behavioral acceptance is never enforced — the #1 quality leak. Existence checks are legitimate for
+// A check that only proves files exist or contain text (in either supported dialect, with no runner) is satisfied by
+// an empty stub, so a ticket's behavioral acceptance is never enforced — the #1 quality leak. Existence checks are legitimate for
 // scaffold/config/docs tickets (nothing to execute), so runDecompose only rejects this for implementation/testing.
 const CHECK_HAS_RUNNER = /\b(npm|npx|pnpm|yarn|node|deno|bun|pytest|python|py|cargo|go|dotnet|dart|flutter|mvn|gradle|jest|vitest|mocha|tsc|tsx|rspec|phpunit|ctest|make|bash|pwsh)\b/i
-const CHECK_IS_EXISTENCE = /\b(Test-Path|Select-String|Get-Content|Get-Item|Get-ChildItem)\b/i
+const CHECK_IS_EXISTENCE =
+  /\b(Test-Path|Select-String|Get-Content|Get-Item|Get-ChildItem|test\s+-[efdx]|grep|cat|ls)\b|\[\s+-[efdx]\s+/i
 // A TESTING ticket's check must actually RUN tests — `npx tsc --noEmit` only typechecks, so a test ticket gating on
 // it never exercises the test it adds (the live planner-validation run gave the headless integration-test ticket
 // exactly this). These are the runners that count as actually running tests.
@@ -522,10 +526,8 @@ const REPLAN_SYSTEM = [
   '- Shape: {"add": [{"title","body","check","role","deps":number[],"priority"}], "cancel": number[], "reopen": number[], "note": string}',
   '- "role" assigns the ticket to a team: architecture, implementation, design, testing, review, or docs.',
   '- "add": new tickets — e.g. split a PARKED ticket into smaller pieces, or add newly discovered work.',
-  '  Their "deps" are REAL board ids that already exist. Every added ticket needs a real "check" command that runs',
-  '  in PowerShell — a portable tool command (`npm test`/`pytest`/`npx tsc --noEmit`/`npm run build`), never bash',
-  '  (`test -f`/`grep`/`/dev/null`/`&&`). Combine PowerShell conditions ONLY with parentheses — `(Test-Path a) -and',
-  '  (Test-Path b)`, never bare `Test-Path a -and Test-Path b` (a syntax error). If a ticket parked on a broken check, re-file it fixed.',
+  `  Their "deps" are REAL board ids that already exist. Every added ticket needs a real check. ${CHECK_PROMPT_RULES}`,
+  '  If a ticket parked on a broken check, re-file it with a command for the current shell.',
   '- ESCALATIONS: if a ticket parked because the worker ESCALATED about a SEPARATE blocking issue it discovered (its',
   '  park reason starts "worker escalated"), ADD a NEW ticket scoped to THAT issue and REOPEN the original — make the',
   '  original depend on the new ticket when it needs the fix first. That is the whole point of the escalation: move the',
@@ -555,7 +557,7 @@ function buildReplanUser(goal: string, spec: string, board: BoardTicketRow[], pa
         // A "check-broken" park means the WORK is likely fine and only the CHECK command was invalid. Replan can
         // only ADD/REOPEN (never cancel — applySafe), so steer it to ADD a corrected-check replacement (R4).
         const fix = /check-broken/i.test(reason)
-          ? ' — the work is likely done but the CHECK was invalid; ADD a replacement ticket for the same work with a CORRECTED PowerShell check (npm test / pytest / npx tsc --noEmit), never bash.'
+          ? ` — the work is likely done but the CHECK was invalid; ADD a replacement ticket for the same work with a CORRECTED ${CHECK_SHELL_LABEL} check (prefer npm test / pytest / npx tsc --noEmit).`
           : ''
         return `  - #${id}: ${reason}${fix}`
       })
@@ -637,8 +639,7 @@ const DECIDE_CONTRACT_SYSTEM = [
   '- "contract": one sentence stating the rule every module must honor (e.g. "Deck.dealCard() returns null when',
   '  empty and never auto-resets; callers create a fresh Deck").',
   '- "apply": ONE consolidation ticket that implements the decision everywhere it is needed and removes the',
-  '  conflicting code. "check" must be a real PowerShell-portable command (npm test / npx vitest run / pytest /',
-  '  npx tsc --noEmit) — never bash. Reuse the contested tickets\' check when in doubt.',
+  `  conflicting code. ${CHECK_PROMPT_RULES} Reuse the contested tickets' check when in doubt.`,
   '- "cancel": the ids of the OPEN contested tickets this decision SUPERSEDES (they are replaced by "apply"). Only',
   '  ids from the list given; never invent ids.',
   '- "lesson": ONE generalizable, cross-project planning lesson — what a FUTURE decompose should decide up front to',
@@ -793,9 +794,7 @@ const CRITIC_SYSTEM = [
   '- If the project is genuinely complete and solid, return empty add/cancel/reopen with a short note — do NOT',
   '  invent busywork. Empty ENDS the run, so only continue when there is real value left.',
   '- Otherwise propose a SMALL set (1–4) of HIGH-VALUE improvement tickets: missing tests, unhandled edge cases,',
-  '  error handling, a risky-area refactor, missing docs. Each needs a real "check" that runs in PowerShell — a',
-  '  portable tool command (`npm test`/`pytest`/`npm run build`/`npx tsc --noEmit`), never bash (`test -f`/`grep`).',
-  '  Combine PowerShell conditions only with parentheses: `(Test-Path a) -and (Test-Path b)`, never the bare form.',
+  `  error handling, a risky-area refactor, or missing docs. Each needs a real check. ${CHECK_PROMPT_RULES}`,
   '- "deps" are real existing board ids (usually none — improvements layer on done work).',
   '- The project\'s file tree AND source code are shown below — READ the code and ground every improvement in a',
   '  specific file/function or a concrete gap you can see there. Never guess from filenames.',
@@ -986,9 +985,7 @@ const MEETING_SYSTEM = (dept: Department): string =>
     '  error handling, a risky-area refactor, missing docs, a perf issue) OR a valuable NEW capability the goal implies',
     '  but that is not built yet — keep advancing the product, do not just polish. If your area is solid AND the goal is',
     '  fully met, return an EMPTY add list with a one-line note. Do NOT invent busywork or gold-plate a finished project.',
-    '- Each ticket needs a real "check" that passes (exit 0) only when done and RUNS IN POWERSHELL — a portable tool',
-    '  command (`npm test`/`pytest`/`npx tsc --noEmit`/`npm run build`), never bash (`test -f`/`grep`/`/dev/null`).',
-    '  Combine PowerShell conditions only with parentheses: `(Test-Path a) -and (Test-Path b)`.',
+    `- Each ticket needs a real check. ${CHECK_PROMPT_RULES}`,
     '- The project source is shown below — ground every proposal in a specific file/gap you can see, never guess.',
     '- Do NOT propose anything ALREADY ON THE BOARD — you are shown the pending/in-progress tickets; re-proposing',
     '  filed work just creates duplicates. Propose only GENUINELY NEW work your area still needs.',
@@ -1062,9 +1059,7 @@ const DECOMPOSE_MEETING_SYSTEM = (dept: Department): string =>
     '- Propose 0-2 tickets for work the draft OVERLOOKED in YOUR area (a missing slice, missing tests/edge cases,',
     '  error handling, a needed doc, a review/validation step). If the draft already covers your area, return an EMPTY',
     '  add list with a one-line note. Do NOT restate tickets already in the draft, and do NOT gold-plate.',
-    '- Each ticket needs a real "check" that passes (exit 0) only when done and RUNS IN POWERSHELL — a portable tool',
-    '  command (`npm test`/`pytest`/`npx tsc --noEmit`/`npm run build`), never bash (`test -f`/`grep`/`/dev/null`).',
-    '  Combine PowerShell conditions only with parentheses: `(Test-Path a) -and (Test-Path b)`.',
+    `- Each ticket needs a real check. ${CHECK_PROMPT_RULES}`,
     '- "deps" MUST be [] (the board does not exist yet — propose standalone tickets). "cancel"/"reopen": always [].',
     '- Your DEPARTMENT MEMORY (craft from past runs of this project) is shown below — use it to spot what is usually',
     '  missed. If this planning surfaced a DURABLE insight for your team, emit the FULL updated memory as concise',
@@ -1133,8 +1128,8 @@ const GROOMING_SYSTEM = (dept: Department): string =>
     'Output RULES — obey exactly:',
     '- Respond with ONE JSON object: {"splits": [{"index": <ticket index>, "pieces": [{"title","body","check","deps":[piece indices]}]}], "note": string}',
     '- Split ONLY tickets from the list below, by their [index], and ONLY ones marked SPLITTABLE. Leave the rest.',
-    '- Each split makes 2+ FOCUSED pieces — one concern / a handful of files each — with a real PowerShell check',
-    '  (`npm test`/`pytest`/`npx tsc --noEmit`/`npm run build`). "deps" are 0-based indices INTO THIS split\'s pieces',
+    `- Each split makes 2+ FOCUSED pieces — one concern / a handful of files each. ${CHECK_PROMPT_RULES}`,
+    '  "deps" are 0-based indices INTO THIS split\'s pieces',
     '  (e.g. a final "enforce coverage" piece depends on the per-file test pieces); usually [].',
     '- If a ticket is already one focused session, do NOT split it. If nothing is too big, return {"splits": []}.',
     '- Do NOT combine tickets, add new work, or touch other departments.',
@@ -1681,8 +1676,8 @@ const DRAFT_SPEC_SYSTEM = [
   '  owns no multi-round state)". Do NOT list alternatives.',
   '- "interfaces": the key public interfaces / module seams (short signatures or descriptions) the pieces agree on.',
   '- "acceptance": concrete, checkable acceptance criteria for the whole goal.',
-  '- "check": the SINGLE PowerShell-portable command that verifies the whole goal is done (npm test / npx vitest run /',
-  '  pytest / npm run build) — never bash. This is the gate the coarse "build the whole thing" attempt must make pass.',
+  `- "check": the SINGLE command that verifies the whole goal is done. ${CHECK_PROMPT_RULES}`,
+  '  This is the gate the coarse "build the whole thing" attempt must make pass.',
   '- Be concrete and final. A decided spec keeps the build from fragmenting.'
 ].join('\n')
 
@@ -1762,8 +1757,8 @@ const SPLIT_NODE_SYSTEM = [
   '- If the node CANNOT be broken into >=2 coherent slices without cutting through a contract (the CONTRACT FLOOR),',
   '  set "escalate": true, a short "reason", and "children": [] — it is handed to a human / stronger model intact.',
   '- Otherwise set "escalate": false and give >=2 children. Each child: a focused "title", a "body" describing',
-  '  exactly what to build (honoring the spec contracts), and a real PowerShell-portable "check" (npm test / npx',
-  '  vitest run / pytest / npx tsc --noEmit) — never bash. Slices must be INDEPENDENTLY buildable (no slice depends',
+  `  exactly what to build (honoring the spec contracts), and a real check. ${CHECK_PROMPT_RULES}`,
+  '  Slices must be INDEPENDENTLY buildable (no slice depends',
   '  on another finishing first); the assembled whole is verified separately.',
   '- "reason": one sentence naming the seam you cut along.'
 ].join('\n')

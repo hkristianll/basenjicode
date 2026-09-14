@@ -31,9 +31,16 @@ describe('decideTerminal (gate authority)', () => {
     expect(t.kind).toBe('park')
   })
   it('R4: a structurally-broken check parks immediately (check-broken), before burning attempts', () => {
-    const t = decideTerminal({ check: 'test -f dist/app.js', outcome: { passed: false, code: 1, timedOut: false }, attemptsSoFar: 1, maxAttempts: 3 })
+    const t = decideTerminal({ check: 'test -f dist/app.js', outcome: { passed: false, code: 1, timedOut: false }, attemptsSoFar: 1, maxAttempts: 3, shellFamily: 'powershell' })
     expect(t.kind).toBe('park')
     if (t.kind === 'park') expect(t.reason).toContain('check-broken')
+  })
+  it('uses the executing dialect instead of treating every check as PowerShell', () => {
+    const failed = { passed: false, code: 1, timedOut: false }
+    expect(decideTerminal({ check: 'test -f dist/app.js', outcome: failed, attemptsSoFar: 1, maxAttempts: 3, shellFamily: 'posix' })).toEqual({ kind: 'iterate', attempt: 2 })
+    const wrongDialect = decideTerminal({ check: 'Test-Path dist/app.js', outcome: failed, attemptsSoFar: 1, maxAttempts: 3, shellFamily: 'posix' })
+    expect(wrongDialect.kind).toBe('park')
+    if (wrongDialect.kind === 'park') expect(wrongDialect.reason).toContain('check-broken')
   })
   it('R4: a valid failing check still iterates (not misclassified as check-broken)', () => {
     expect(decideTerminal({ check: 'npx tsc --noEmit', outcome: { passed: false, code: 1, timedOut: false }, attemptsSoFar: 1, maxAttempts: 3 })).toEqual({ kind: 'iterate', attempt: 2 })

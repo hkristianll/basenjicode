@@ -5,9 +5,25 @@ import path from 'node:path'
 import { IPC, type PreviewControl } from '../shared/ipc-types'
 import { log } from './logger'
 import { isBlockedHostForPreview } from './web-util'
-import { type ConsoleLine, type ConsoleLevel, parseConsoleMessage, filterByLevel } from './preview-util'
+import {
+  type ConsoleLine,
+  type ConsoleLevel,
+  type Viewport,
+  parseConsoleMessage,
+  filterByLevel,
+  formatNetworkDiagnostic,
+  normalizeViewport
+} from './preview-util'
 
 export type { ConsoleLine, ConsoleLevel } from './preview-util'
+
+export interface ScreenshotResult {
+  path: string
+  width: number
+  height: number
+  /** The viewport the page was rendered at, or null when this is just the panel's own size. */
+  emulated: Viewport | null
+}
 
 export interface PreviewInfo {
   available: boolean
@@ -26,6 +42,8 @@ export class PreviewUnavailable extends Error {
 import { fileStamp } from './time-util'
 
 const MAX_CONSOLE = 300
+const MAX_PENDING_DIAGNOSTICS = 50
+const RELAYOUT_SETTLE_MS = 250 // let an emulated resize finish reflowing before capturing
 const SNAPSHOT_MAX_TEXT = 8000
 const EVAL_MAX_TEXT = 10_000 // cap preview_eval results, symmetric with web_fetch (15k) / snapshot (8k)
 
@@ -43,6 +61,9 @@ export class PreviewService {
   private url = ''
   private title = ''
   private console: ConsoleLine[] = []
+  /** Errors/warnings not yet included automatically in an agent-facing preview tool result. */
+  private pendingDiagnostics: ConsoleLine[] = []
+  private networkKeys = new Set<string>()
   private lastLoadError: string | null = null
   private nonce = 0
   private registerWaiters = new Set<(ok: boolean) => void>()
@@ -52,7 +73,7 @@ export class PreviewService {
   // ---- renderer-driven lifecycle ----
 
   /** Called from IPC when the renderer's <webview> reaches dom-ready. */
-  onRegister(p: { webContentsId: number; url: string; title: string }): void {
+  onRegister(p: { webContentsId: number; url: string; title: string; ready?: boolean }): void {
     const origin = previewOrigin(p.url)
     const alreadyRegistered = p.webContentsId === this.guestId && origin === this.registeredOrigin
     this.url = p.url
@@ -63,9 +84,11 @@ export class PreviewService {
       this.registeredOrigin = origin
       log('INFO', `preview: registered guest ${p.webContentsId} @ ${p.url}`)
     }
-    const waiters = [...this.registerWaiters]
-    this.registerWaiters.clear()
-    for (const w of waiters) w(true)
+    if (p.ready !== false) {
+      const waiters = [...this.registerWaiters]
+      this.registerWaiters.clear()
+      for (const w of waiters) w(true)
+    }
   }
 
   /** Called from IPC when the <webview> is unmounted (panel closed). */
@@ -96,6 +119,7 @@ export class PreviewService {
     const win = BrowserWindow.getAllWindows()[0]
     if (!win) throw new Error('no application window is open')
     this.lastLoadError = null
+    this.beginNavigation()
     const registered = this.waitForRegister(timeoutMs)
     this.send(win.webContents, { action: 'open', url, nonce: ++this.nonce })
     log('INFO', `preview: open ${url} (nonce ${this.nonce})`)
@@ -109,6 +133,7 @@ export class PreviewService {
   async reload(timeoutMs = 20_000): Promise<{ info: PreviewInfo; loadError: string | null }> {
     const g = this.requireGuest()
     this.lastLoadError = null
+    this.beginNavigation()
     // Bypass the HTTP cache: the agent reloads right after a rebuild, and a plain reload() can serve
     // stale assets from the guest's cache (esp. for static servers that don't send no-cache headers).
     g.reloadIgnoringCache()
@@ -142,15 +167,90 @@ export class PreviewService {
     return out
   }
 
-  async screenshot(timeoutMs = 15_000): Promise<{ path: string; width: number; height: number }> {
+  /** Consume errors/warnings that have not yet been piped into a preview tool result. */
+  diagnostics(opts: { clear?: boolean } = { clear: true }): ConsoleLine[] {
+    const out = this.pendingDiagnostics.slice()
+    if (opts.clear !== false) this.pendingDiagnostics = []
+    return out
+  }
+
+  /**
+   * Capture the previewed page. With no `opts`, this captures the Preview panel exactly as laid out —
+   * whatever shape the user happens to have dragged it to. Pass width/height to render at a specific
+   * viewport instead, so `100vh` and media queries evaluate against the size the agent is reasoning
+   * about rather than the panel's incidental one.
+   */
+  async screenshot(opts: { width?: number; height?: number } = {}, timeoutMs = 15_000): Promise<ScreenshotResult> {
     const g = this.requireGuest()
+    const want = normalizeViewport(opts)
+    if (!want) return this.capturePanel(g, timeoutMs)
+    try {
+      return await this.captureAtViewport(g, want, timeoutMs)
+    } catch (e) {
+      // Emulation is best-effort (the debugger can be occupied by open devtools). A panel-sized shot
+      // with `emulated: null` is still useful, and the tool tells the model which one it got.
+      log('ERROR', `preview: ${want.width}×${want.height} capture failed (${String(e)}) — falling back to the panel size`)
+      return this.capturePanel(g, timeoutMs)
+    }
+  }
+
+  private async capturePanel(g: WebContents, timeoutMs: number): Promise<ScreenshotResult> {
     const img = await withTimeout(g.capturePage(), timeoutMs)
     const { width, height } = img.getSize()
+    return { path: this.writeShot(img.toPNG()), width, height, emulated: null }
+  }
+
+  /**
+   * Render at an exact viewport via CDP device-metrics emulation. `capturePage()` cannot do this —
+   * it only ever returns the panel as it currently sits, which is why a landscape layout reviewed in
+   * a tall narrow panel reads as broken and sends the agent chasing phantom overflow.
+   */
+  private async captureAtViewport(g: WebContents, view: Viewport, timeoutMs: number): Promise<ScreenshotResult> {
+    const dbg = g.debugger
+    // Devtools (or a previous caller) may already own the debugger; borrow it and leave it attached.
+    const preAttached = dbg.isAttached()
+    if (!preAttached) dbg.attach('1.3')
+    try {
+      await withTimeout(
+        dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
+          width: view.width,
+          height: view.height,
+          deviceScaleFactor: 1,
+          mobile: false
+        }),
+        timeoutMs
+      )
+      // Media queries and vh units re-evaluate synchronously, but transitions and webfont reflow land
+      // a frame or two later — capturing immediately catches the layout mid-move.
+      await delay(RELAYOUT_SETTLE_MS)
+      const shot = (await withTimeout(dbg.sendCommand('Page.captureScreenshot', { format: 'png' }), timeoutMs)) as {
+        data: string
+      }
+      return { path: this.writeShot(Buffer.from(shot.data, 'base64')), width: view.width, height: view.height, emulated: view }
+    } finally {
+      // ALWAYS restore, on the error path too: a leaked override leaves the user's Preview panel stuck
+      // at the emulated size long after the tool call returned.
+      try {
+        await dbg.sendCommand('Emulation.clearDeviceMetricsOverride')
+      } catch {
+        /* guest already gone */
+      }
+      if (!preAttached) {
+        try {
+          dbg.detach()
+        } catch {
+          /* already detached */
+        }
+      }
+    }
+  }
+
+  private writeShot(png: Buffer): string {
     const dir = path.join(app.getPath('temp'), 'nordcode-preview')
     fs.mkdirSync(dir, { recursive: true })
     const file = path.join(dir, `preview-${fileStamp()}-${randomUUID().slice(0, 6)}.png`)
-    fs.writeFileSync(file, img.toPNG())
-    return { path: file, width, height }
+    fs.writeFileSync(file, png)
+    return file
   }
 
   // ---- internals ----
@@ -236,6 +336,24 @@ export class PreviewService {
       this.lastLoadError = `did-fail-load (${String(code)}): ${String(desc)}`
       this.pushConsole([{ level: 'error', message: `Page failed to load: ${String(desc)} (${String(code)})` }])
     }
+    const onRequestError = (details: Electron.OnErrorOccurredListenerDetails): void => {
+      if (details.webContentsId !== id && details.webContents?.id !== id) return
+      this.pushNetwork({
+        method: details.method,
+        resourceType: details.resourceType,
+        url: details.url,
+        error: details.error
+      })
+    }
+    const onRequestComplete = (details: Electron.OnCompletedListenerDetails): void => {
+      if (details.webContentsId !== id && details.webContents?.id !== id) return
+      this.pushNetwork({
+        method: details.method,
+        resourceType: details.resourceType,
+        url: details.url,
+        statusCode: details.statusCode
+      })
+    }
     // Defense-in-depth: a previewed (loopback) page must not be able to redirect the guest into the
     // LAN/link-local where preview_eval/snapshot could then read it. Block such top-level navigations.
     const onNavigate = (e: { preventDefault: () => void }, url: string): void => {
@@ -254,12 +372,18 @@ export class PreviewService {
     g.on('did-fail-load', onFail as never)
     g.on('will-navigate', onNavigate as never)
     g.on('will-redirect', onNavigate as never)
+    // Electron permits one listener per webRequest event. This is exclusive by design: partition="preview" is
+    // dedicated to this webview; any future preview-session subscriber must be composed here rather than registered separately.
+    g.session.webRequest.onErrorOccurred(onRequestError)
+    g.session.webRequest.onCompleted(onRequestComplete)
     this.detach = (): void => {
       try {
         g.off('console-message', onConsole as never)
         g.off('did-fail-load', onFail as never)
         g.off('will-navigate', onNavigate as never)
         g.off('will-redirect', onNavigate as never)
+        g.session.webRequest.onErrorOccurred(null)
+        g.session.webRequest.onCompleted(null)
       } catch {
         /* guest already gone */
       }
@@ -269,8 +393,34 @@ export class PreviewService {
 
   private pushConsole(a: unknown[]): void {
     const { level, message } = parseConsoleMessage(a)
-    this.console.push({ ts: Date.now(), level, message })
+    const line = { ts: Date.now(), level, message }
+    this.console.push(line)
     if (this.console.length > MAX_CONSOLE) this.console.splice(0, this.console.length - MAX_CONSOLE)
+    if (level === 'warning' || level === 'error') this.pushPending(line)
+  }
+
+  private pushNetwork(input: Parameters<typeof formatNetworkDiagnostic>[0]): void {
+    const message = formatNetworkDiagnostic(input)
+    if (!message || this.networkKeys.has(message)) return
+    this.networkKeys.add(message)
+    const line: ConsoleLine = { ts: Date.now(), level: 'error', message }
+    this.console.push(line)
+    if (this.console.length > MAX_CONSOLE) this.console.splice(0, this.console.length - MAX_CONSOLE)
+    this.pushPending(line)
+  }
+
+  private pushPending(line: ConsoleLine): void {
+    this.pendingDiagnostics.push(line)
+    if (this.pendingDiagnostics.length > MAX_PENDING_DIAGNOSTICS) {
+      this.pendingDiagnostics.splice(0, this.pendingDiagnostics.length - MAX_PENDING_DIAGNOSTICS)
+    }
+  }
+
+  private beginNavigation(): void {
+    // Keep explicit preview_console history until its clear option is used. Only the automatic-report queue and
+    // per-navigation network dedupe reset here, so a one-shot error remains inspectable after a reload.
+    this.pendingDiagnostics = []
+    this.networkKeys.clear()
   }
 }
 
@@ -288,6 +438,10 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
       }
     )
   })
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function safeCall<T>(fn: () => T, fallback: T): T {

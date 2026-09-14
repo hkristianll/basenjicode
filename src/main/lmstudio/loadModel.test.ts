@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const { execFileMock } = vi.hoisted(() => ({ execFileMock: vi.fn() }))
 vi.mock('node:child_process', () => ({ execFile: execFileMock }))
 
-import { planModelLoad, ensureModelLoaded } from './loadModel'
+import { planModelLoad, ensureModelLoaded, isLocalLmStudio, lmsUnloadUnlocked } from './loadModel'
 
 describe('planModelLoad', () => {
   it('returns null when state is unknown (leave LM Studio alone)', () => {
@@ -88,5 +88,58 @@ describe('ensureModelLoaded — no reload thrash when the model maxes out below 
 
     const loadCalls = execFileMock.mock.calls.filter((c) => Array.isArray(c[1]) && (c[1] as string[]).includes('load'))
     expect(loadCalls).toHaveLength(1) // `lms load` issued once (turn 1), not on turn 2
+  })
+})
+
+describe('isLocalLmStudio', () => {
+  it('accepts loopback in every spelling', () => {
+    expect(isLocalLmStudio('http://127.0.0.1:1234/v1')).toBe(true)
+    expect(isLocalLmStudio('http://localhost:1234/v1')).toBe(true)
+    expect(isLocalLmStudio('http://[::1]:1234/v1')).toBe(true)
+  })
+
+  it('rejects a LAN/remote server — the `lms` CLI could never reach it', () => {
+    expect(isLocalLmStudio('http://192.168.68.65:1234/v1')).toBe(false)
+    expect(isLocalLmStudio('https://models.example.com/v1')).toBe(false)
+    expect(isLocalLmStudio('not a url')).toBe(false)
+  })
+})
+
+describe('the `lms` CLI is never pointed at a remote server', () => {
+  beforeEach(() => {
+    execFileMock.mockReset()
+    execFileMock.mockImplementation((_f: string, _a: string[], _o: unknown, cb: (e: unknown) => void) => cb(null))
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('reports failure (so callers fall back to REST) instead of unloading on the wrong machine', async () => {
+    expect(await lmsUnloadUnlocked('http://192.168.68.65:1234/v1', 'qwen3.8-27b')).toBe(false)
+    expect(execFileMock).not.toHaveBeenCalled()
+  })
+
+  it('treats "Model Not Found" as failure even though `lms unload` exits 0', async () => {
+    execFileMock.mockImplementation((_f: string, _a: string[], _o: unknown, cb: (e: unknown, o: string, s: string) => void) =>
+      cb(null, 'Model Not Found\n\nCannot find a model with the identifier "ghost".', '')
+    )
+    expect(await lmsUnloadUnlocked('http://127.0.0.1:1234/v1', 'ghost')).toBe(false)
+  })
+
+  it('does not announce (or attempt) a reload it cannot perform on a remote server', async () => {
+    const base = 'http://192.168.68.65:1234/v1'
+    const model = 'remote-fixture-model'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ data: [{ id: model, state: 'idle', loaded_context_length: 0, max_context_length: 262_144 }] })
+      }) as unknown as Response)
+    )
+    const onReloadStart = vi.fn()
+
+    const res = await ensureModelLoaded(base, model, 150_000, onReloadStart)
+
+    expect(res.reloaded).toBe(false)
+    expect(onReloadStart).not.toHaveBeenCalled() // no lying "Loading … at 150,000-token context" notice
+    expect(execFileMock).not.toHaveBeenCalled()
   })
 })

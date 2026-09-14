@@ -24,6 +24,8 @@ export const IPC = {
   mcpStatus: 'mcp:status',
   lmstudioProbe: 'lmstudio:probe',
   lmstudioModels: 'lmstudio:models',
+  contextLimit: 'agent:contextLimit',
+  clipboardWrite: 'clipboard:write',
   modelProfileDescribe: 'model:profileDescribe',
   agentSetEffort: 'agent:setEffort',
   voiceProbe: 'voice:probe',
@@ -145,6 +147,8 @@ export interface PreviewRegister {
   webContentsId: number
   url: string
   title: string
+  /** False for the early did-attach registration; true/omitted once DOM-ready can release preview_open. */
+  ready?: boolean
 }
 
 export interface GitFile {
@@ -199,6 +203,8 @@ export type AgentEvent =
       editedFiles?: number
     }
   | { type: 'session-titled'; sessionId: string; title: string }
+  // The set_working_folder tool re-rooted a session mid-turn — the renderer updates its meta + top bar.
+  | { type: 'session-cwd'; sessionId: string; cwd: string }
 
 /* ----- Loop runner (autonomous board drain) — CANONICAL contract; consumers (T3/T4/T6/T7) must not redefine. ----- */
 
@@ -425,6 +431,10 @@ export interface Api {
     /** Live connection status of each configured MCP server (for the Settings UI). */
     status(): Promise<MCPServerStatus[]>
   }
+  clipboard: {
+    /** Copy via the main process, which (unlike navigator.clipboard) needs no document focus. */
+    write(text: string): Promise<boolean>
+  }
   lmstudio: {
     /** Probe any OpenAI-compatible backend; defaults to the active connection when no args given. */
     probe(p?: { baseURL?: string; apiKey?: string; kind?: ConnectionKind }): Promise<ProbeResult>
@@ -432,6 +442,10 @@ export interface Api {
     models(p?: { baseURL?: string; apiKey?: string; kind?: ConnectionKind }): Promise<string[]>
     /** One-line capability-profile summary for a model id (seeded + learned facts). */
     profileDescribe(model: string): Promise<string>
+    /** The context window a turn will actually use: the setting trimmed to the model's real loaded length. */
+    contextLimit(): Promise<number>
+    /** Fires whenever that effective window changes (connection switch, settings save, model reload). */
+    onContextLimit(cb: (limit: number) => void): () => void
   }
   voice: {
     /** Is the voice sidecar reachable? */

@@ -41,8 +41,8 @@ export function LoopChat({ cwd, project }: { cwd: string; project: string }) {
       // agent.onEvent is the GLOBAL event channel — every session's turn broadcasts here, including the main
       // chat that stays mounted (display-hidden) behind the Loop tab. Fold in ONLY events for THIS loop chat's
       // own turn; otherwise a concurrent main-chat turn streams its deltas / tool chips / approval buttons into
-      // this list. Mirror App.tsx's turnId routing. (session-titled carries no turnId, so skip it outright.)
-      if (e.type === 'session-titled' || e.turnId !== turnRef.current) return
+      // this list. Mirror App.tsx's turnId routing. (session-titled/session-cwd carry no turnId, so skip them.)
+      if (e.type === 'session-titled' || e.type === 'session-cwd' || e.turnId !== turnRef.current) return
       setItems((cur) => reduce(cur, e, () => ++seq.current))
       if (e.type === 'turn-done') setBusy(false)
     })

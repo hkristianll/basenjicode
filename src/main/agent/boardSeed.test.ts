@@ -37,4 +37,10 @@ describe('buildSeedMessage', () => {
   it('omits the lead-brief section when there is none', () => {
     expect(buildSeedMessage(ticket, '# spec')).not.toContain("team lead's brief")
   })
+
+  it('injects the project playbook into the worker seed', () => {
+    const msg = buildSeedMessage(ticket, null, undefined, undefined, null, undefined, undefined, 'Project definition of done:\n- npm test')
+    expect(msg).toContain('Project playbook (apply to this ticket)')
+    expect(msg).toContain('Project definition of done:\n- npm test')
+  })
 })

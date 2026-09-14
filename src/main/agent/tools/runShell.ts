@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { ToolDef } from '../registry'
 import type { ToolPreview } from '../../../shared/ipc-types'
-import { runPowerShell, shellFamily, type ShellResult } from '../../shell/powershell'
+import { runShell, shellFamily, type ShellResult } from '../../shell/powershell'
 import { LIMITS, truncateMiddle } from '../util'
 import { dangerousRecursiveDelete } from './deleteGuard'
 
@@ -60,7 +60,7 @@ export const runShellTool: ToolDef<typeof schema> = {
     // whole project this way. Targeted file/subdir deletes remain allowed.
     const danger = dangerousRecursiveDelete(args.command, ctx.workspace.root)
     if (danger) return `ERROR: ${danger}`
-    const res = await runPowerShell({
+    const res = await runShell({
       command: args.command,
       cwd: ctx.workspace.root,
       timeoutMs: LIMITS.SHELL_TIMEOUT_MS,

@@ -48,6 +48,7 @@ For an installable build: `npm run package:win`, `npm run package:mac`, or `npm 
 ### Agent capabilities
 
 - Read, write, edit, and multi-edit files; grep/glob search; shell commands; background tasks.
+- The agent can switch the chat's working folder (`set_working_folder`) — "new project, make a folder for it" re-roots the session, and the Git panel and top bar follow.
 - Live in-app preview pane with screenshot feedback to the model.
 - Task/todo tracking panel.
 - Approval gates for risky actions; undoable edits with per-turn snapshots and rewind.
@@ -55,6 +56,23 @@ For an installable build: `npm run package:win`, `npm run package:mac`, or `npm 
 - Loop mode: drains the ticket board one ticket at a time, verifying each.
 - Hermes orchestrator: give it a big goal; it decomposes, executes, and replans.
 - Multi-model roles: planner, coder, and reviewer can be different models.
+
+### Project playbook
+
+Loop workers automatically see verification scripts from the project's `package.json`. To add a reusable definition
+of done, create `basenjicode.playbook.json` in the project root:
+
+```json
+{
+  "definitionOfDone": [
+    "No new TypeScript errors",
+    "Relevant tests pass",
+    "User-facing behavior is documented"
+  ]
+}
+```
+
+The playbook is injected into every ticket seed; the ticket's own verification check remains mandatory.
 
 ## Backends
 

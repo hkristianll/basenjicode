@@ -13,6 +13,7 @@ import type { ToolRegistry } from './registry'
 import type { LoopConfig, LoopEvent } from '../../shared/ipc-types'
 import type { Settings } from '../../shared/domain-types'
 import type { BoardTicket, TicketOutcome, TicketRunHooks } from './boardRunner'
+import { shellFamily, type ShellFamily } from '../shell/powershell'
 
 export interface RunnerDeps {
   settings: Settings
@@ -79,15 +80,25 @@ export function checkFailureFeedback(check: string, outcome: CheckOutcome): stri
  * forced to make the ENTIRE project typecheck (the scope-bleed: every batched coder rebuilding the whole app just to
  * satisfy a global tsc). The rewritten command WRITES a tiny per-ticket tsconfig that extends the project config but
  * `include`s only the declared files — tsc still pulls in their real imports (types, libs), but NOT unrelated modules
- * other tickets own — then typechecks against it. Pure: the PowerShell command writes the tsconfig itself, so there's
- * no file-write side effect here. Left unchanged when the check isn't a bare whole-project tsc or no files are declared.
+ * other tickets own — then typechecks against it. Pure: the returned platform-correct shell command writes the
+ * tsconfig itself, so there's no file-write side effect here. Left unchanged when the check isn't a bare
+ * whole-project tsc or no files are declared.
  */
-export function scopeTscCheck(check: string, files: string[]): string {
+export function scopeTscCheck(
+  check: string,
+  files: string[],
+  family: ShellFamily = shellFamily()
+): string {
   const isBareWholeProjectTsc = /\btsc\s+--noEmit\b/.test(check) && !/(\s-p\b|--project\b|tsconfig|\.tsx?(\s|$))/.test(check)
   if (!isBareWholeProjectTsc || files.length === 0) return check
-  const json = `{"extends":"./tsconfig.json","include":[${files.map((f) => `"${f.replace(/\\/g, '/')}"`).join(',')}]}`
-  // Set-Content writes the scoped tsconfig; the trailing tsc determines the check's exit code (success = THIS file compiles).
-  return `'${json}' | Set-Content tsconfig.ticket.json; npx tsc --noEmit -p tsconfig.ticket.json`
+  const json = JSON.stringify({ extends: './tsconfig.json', include: files.map((file) => file.replace(/\\/g, '/')) })
+  // The trailing tsc determines the check's exit code (success = THIS file compiles). Quote the JSON as inert data
+  // in each dialect; ticket paths can legally contain apostrophes.
+  if (family === 'powershell') {
+    return `'${json.replace(/'/g, "''")}' | Set-Content tsconfig.ticket.json; npx tsc --noEmit -p tsconfig.ticket.json`
+  }
+  const quoted = `'${json.replace(/'/g, `'\\''`)}'`
+  return `printf '%s\\n' ${quoted} > tsconfig.ticket.json && npx tsc --noEmit -p tsconfig.ticket.json`
 }
 
 /**

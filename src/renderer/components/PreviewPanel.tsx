@@ -92,14 +92,14 @@ export function PreviewPanel({ target }: { target?: PreviewTarget }) {
   useEffect(() => {
     const wv = webviewRef.current
     if (!wv) return
-    const register = (): void => {
+    const register = (ready = true): void => {
       try {
         const id = wv.getWebContentsId()
         const currentUrl = wv.getURL()
         const currentTitle = wv.getTitle()
         guestIdRef.current = id
         setTitle(currentTitle || hostLabel(currentUrl))
-        window.api.preview.register({ webContentsId: id, url: currentUrl, title: currentTitle })
+        window.api.preview.register({ webContentsId: id, url: currentUrl, title: currentTitle, ready })
       } catch {
         /* not attached yet */
       }
@@ -117,15 +117,17 @@ export function PreviewPanel({ target }: { target?: PreviewTarget }) {
       } catch {
         /* ignore */
       }
-      register()
+      register(true)
     }
+    const onAttach = (): void => register(false)
+    const onDomReady = (): void => register(true)
     const onFail = (event: Event): void => {
       const e = event as Event & { errorDescription?: string; validatedURL?: string; isMainFrame?: boolean }
       if (e.isMainFrame === false) return
       setLoadState('error')
       setLoadError(e.errorDescription || 'Preview could not be loaded.')
       if (e.validatedURL) setUrl(e.validatedURL)
-      register()
+      register(true)
     }
     const onNavigate = (): void => {
       try {
@@ -134,22 +136,25 @@ export function PreviewPanel({ target }: { target?: PreviewTarget }) {
       } catch {
         /* ignore */
       }
-      register()
+      register(false)
     }
-    // Register on dom-ready and again on navigation, covering missed dom-ready and in-page nav.
+    // Register as soon as the guest attaches so main captures startup errors from the first scripts,
+    // then again on navigation to keep URL/title current.
+    wv.addEventListener('did-attach', onAttach)
     wv.addEventListener('did-start-loading', onStart)
     wv.addEventListener('did-stop-loading', onReady)
     wv.addEventListener('did-finish-load', onReady)
     wv.addEventListener('did-fail-load', onFail)
-    wv.addEventListener('dom-ready', register)
+    wv.addEventListener('dom-ready', onDomReady)
     wv.addEventListener('did-navigate', onNavigate)
     wv.addEventListener('did-navigate-in-page', onNavigate)
     return () => {
+      wv.removeEventListener('did-attach', onAttach)
       wv.removeEventListener('did-start-loading', onStart)
       wv.removeEventListener('did-stop-loading', onReady)
       wv.removeEventListener('did-finish-load', onReady)
       wv.removeEventListener('did-fail-load', onFail)
-      wv.removeEventListener('dom-ready', register)
+      wv.removeEventListener('dom-ready', onDomReady)
       wv.removeEventListener('did-navigate', onNavigate)
       wv.removeEventListener('did-navigate-in-page', onNavigate)
       if (guestIdRef.current !== null) window.api.preview.closed(guestIdRef.current)

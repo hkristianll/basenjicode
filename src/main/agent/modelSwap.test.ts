@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { shouldSwap, unloadModel, rolesToFree } from './modelSwap'
+import { shouldSwap, unloadModel, rolesToFree, loadedInstanceIds } from './modelSwap'
 import { lmsUnloadUnlocked } from '../lmstudio/loadModel'
 import type { LoopConfig } from '../../shared/ipc-types'
 import type { Settings, Connection } from '../../shared/domain-types'
@@ -112,7 +112,8 @@ describe('unloadModel — an empty model id must never wipe the whole server', (
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     await unloadModel({ kind: 'lmstudio', baseURL: 'http://localhost:1234/v1' }, 'target')
-    expect(lmsMock).toHaveBeenCalledWith('target')
+    // The baseURL rides along so the CLI helper can refuse a server it cannot reach.
+    expect(lmsMock).toHaveBeenCalledWith('http://localhost:1234/v1', 'target')
     expect(fetchMock).not.toHaveBeenCalled() // CLI handled it — no fragile REST call
   })
 
@@ -144,3 +145,29 @@ describe('unloadModel — an empty model id must never wipe the whole server', (
   it('off when both roles explicitly select the same model', () => {
     expect(shouldSwap(cfg({ reviewerConnectionId: 'worker', workerModel: 'coder', reviewerModel: 'coder' }))).toBe(false)
   })
+
+describe('loadedInstanceIds', () => {
+  // Verbatim shape from LM Studio on 192.168.68.65 (trimmed): the flat `data[].instance_id` form the
+  // old parser expected is absent, which is why the swap silently freed nothing.
+  const current = {
+    models: [
+      { key: 'qwen3.8-27b', loaded_instances: [{ id: 'qwen3.8-27b', config: { context_length: 134107 } }] },
+      { key: 'flux.2-klein-4b', loaded_instances: [] }
+    ]
+  }
+
+  it('finds the instance in the current models[].loaded_instances[] shape', () => {
+    expect(loadedInstanceIds(current, 'qwen3.8-27b')).toEqual(['qwen3.8-27b'])
+  })
+
+  it('still reads the legacy flat data[].instance_id shape', () => {
+    expect(loadedInstanceIds({ data: [{ id: 'm', instance_id: 'm:1' }] }, 'm')).toEqual(['m:1'])
+  })
+
+  it('returns nothing for a model that is not loaded, and never on a blank id', () => {
+    expect(loadedInstanceIds(current, 'flux.2-klein-4b')).toEqual([])
+    expect(loadedInstanceIds(current, 'not-here')).toEqual([])
+    expect(loadedInstanceIds(current, '')).toEqual([])
+    expect(loadedInstanceIds(null, 'qwen3.8-27b')).toEqual([])
+  })
+})

@@ -13,11 +13,20 @@ export interface TodoController {
 /** Remembers which files were read this session (with their mtime) to guard edits against stale reads. */
 export class ReadTracker {
   private mtimes = new Map<string, number>()
+  /** Actual read_file targets (record() is also used after writes to refresh stale-read guards). */
+  private fileReads = new Set<string>()
   /** Paths read in FULL (not just a line range) — the clobber guard requires a full read. */
   private fullReads = new Set<string>()
   record(absPath: string, mtimeMs: number, full = true): void {
     this.mtimes.set(absPath, mtimeMs)
     if (full) this.fullReads.add(absPath)
+  }
+  recordFileRead(absPath: string, mtimeMs: number, full = true): void {
+    this.record(absPath, mtimeMs, full)
+    this.fileReads.add(absPath)
+  }
+  readPaths(): string[] {
+    return [...this.fileReads]
   }
   isStale(absPath: string, currentMtimeMs: number): boolean {
     const seen = this.mtimes.get(absPath)
@@ -64,6 +73,9 @@ export interface ToolContext {
    *  the images are ALSO fed back to the model (as a follow-up user message) so a vision-capable model can SEE
    *  them — e.g. preview_screenshot for visual review. Default (UI-only) preserves generate_image's behavior. */
   attachImages?: (dataUrls: string[], opts?: { toModel?: boolean }) => void
+  /** Chat-only capability: re-root this session's sandbox at an existing directory (set_working_folder) and
+   *  return the canonical new root. Absent for board/manager sessions — a worker must never re-root mid-ticket. */
+  setWorkspaceRoot?: (absPath: string) => string
 }
 
 export interface ToolDef<S extends z.ZodTypeAny = z.ZodTypeAny> {

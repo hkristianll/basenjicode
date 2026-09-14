@@ -188,7 +188,7 @@ export function killAllForeground(): void {
 
 /** Run a single shell command (PowerShell on Windows, $SHELL on POSIX), capturing output with a
  *  timeout and abort support. */
-export function runPowerShell(opts: {
+export function runShell(opts: {
   command: string
   cwd: string
   timeoutMs: number
@@ -238,3 +238,6 @@ export function runPowerShell(opts: {
     child.on('close', (code) => finish(code))
   })
 }
+
+/** @deprecated compatibility alias while callers migrate to the platform-neutral name. */
+export const runPowerShell = runShell

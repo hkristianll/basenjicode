@@ -1,6 +1,7 @@
 // Pure loop decision logic — no electron / IPC / shell imports, so it unit-tests headless.
 // The `check` (a verifiable goal) is the authority for "done"; the inner turn's stop reason is not.
 import { validateCheck } from './checkLint'
+import type { ShellFamily } from '../shell/powershell'
 
 export interface CheckOutcome {
   /** true ONLY when the check command exited 0 and did not time out. */
@@ -29,6 +30,8 @@ export interface DecideInput {
   maxAttempts: number
   /** 'review' = always gate (a passing check yields review, not done); 'auto'/undefined = pass → done. */
   terminalMode?: 'auto' | 'review'
+  /** Shell that executes the check. Defaults to the host; injectable so both contracts test on every CI OS. */
+  shellFamily?: ShellFamily
 }
 
 /**
@@ -47,10 +50,10 @@ export function decideTerminal(input: DecideInput): Terminal {
   if (input.outcome === undefined) throw new Error('decideTerminal: check present but no outcome to evaluate')
   // A passing check is 'done' — unless the operator chose "always review", which gates every ticket.
   if (input.outcome.passed) return input.terminalMode === 'review' ? { kind: 'review' } : { kind: 'done' }
-  // A structurally-broken check (bash idiom / invalid PowerShell) can NEVER pass — retrying the CODE is wasted.
+  // A structurally-broken or cross-dialect check can NEVER pass — retrying the CODE is wasted.
   // Park immediately with a distinct reason that blames the CHECK, so a correct-but-unverifiable ticket doesn't
   // burn maxAttempts fresh ~100k-token sessions before parking (mode 2). Classify from the command string only.
-  const lint = validateCheck(check)
+  const lint = validateCheck(check, input.shellFamily)
   if (!lint.ok) return { kind: 'park', reason: `check-broken: ${lint.reason}` }
   if (input.attemptsSoFar < input.maxAttempts) return { kind: 'iterate', attempt: input.attemptsSoFar + 1 }
   const { code, timedOut } = input.outcome
